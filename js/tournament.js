@@ -70,7 +70,7 @@ function render() {
       ? el('p', { class: 'muted sm' }, `${pub.teamCount || 0} teams · ${pub.matchesDecided}/${pub.matchesTotal} matches decided`)
       : null,
     isSignupOpen(tournament, now)
-      ? el('a', { class: 'btn', href: 'captain.html#/signup' }, 'Register your team →')
+      ? el('a', { class: 'btn', href: 'index.html' }, 'Register your team →')
       : null,
   ));
 

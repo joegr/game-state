@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="game-state — the public, anonymized tournament bracket: live stage, roadmap, and results as matches close." />
+  <title>Bracket · game-state</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🎲</span>
+      <span class="brand-text">
+        <span class="brand-name">game-state</span>
+        <span class="brand-tag">public tournament bracket</span>
+      </span>
+    </div>
+    <h1 id="tourney-name" class="tourney-name">Loading…</h1>
+    <nav class="tabs">
+      <a class="tab" href="index.html">Sign up</a>
+      <a class="tab active" href="bracket.html">Bracket</a>
+      <a class="tab" href="captain.html#/captain">Captain view</a>
+    </nav>
+  </header>
+  <main id="app"><div class="card"><p class="muted">Loading tournament…</p></div></main>
+  <footer class="foot"><span>game-state · a static, time-driven tournament state machine</span></footer>
+  <script type="module" src="js/tournament.js"></script>
+</body>
+</html>

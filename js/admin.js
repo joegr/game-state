@@ -178,7 +178,7 @@ function renderDashboard() {
   app.append(el('div', { class: 'row spread' },
     el('h2', {}, 'Admin'),
     el('div', { class: 'row' },
-      el('a', { class: 'btn ghost sm', href: 'index.html', target: '_blank' }, 'View public ↗'),
+      el('a', { class: 'btn ghost sm', href: 'bracket.html', target: '_blank' }, 'View public ↗'),
       el('button', { class: 'btn ghost sm', onclick: () => { session = null; render(); } }, 'Lock'),
     ),
   ));

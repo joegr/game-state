@@ -56,7 +56,7 @@ export async function renderSignup(root, tournament) {
   });
 }
 
-function renderSubmission(out, tournament, { sealed, fp, captain }) {
+export function renderSubmission(out, tournament, { sealed, fp, captain }) {
   clear(out);
   const body = `game-state signup\nteam: ${fp}\n\n\`\`\`\n${sealed}\n\`\`\`\n`;
   const repo = tournament.signup?.repo || 'your-org/your-tournament';

@@ -27,7 +27,7 @@ function nav() {
   const routes = [['#/signup', 'Sign up'], ['#/captain', 'Captain view']];
   const here = location.hash || '#/signup';
   return el('nav', { class: 'tabs' },
-    el('a', { href: 'index.html', class: 'tab' }, '← Tournament'),
+    el('a', { href: 'bracket.html', class: 'tab' }, '← Bracket'),
     routes.map(([href, label]) =>
       el('a', { href, class: 'tab' + (here.startsWith(href) ? ' active' : '') }, label)));
 }
