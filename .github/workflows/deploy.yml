@@ -8,7 +8,7 @@ on:
     branches: [main]
     paths:
       - 'index.html'
-      - 'public.html'
+      - 'captain.html'
       - 'css/**'
       - 'js/**'
       - 'config/**'

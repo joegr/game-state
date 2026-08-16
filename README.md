@@ -34,8 +34,8 @@ rewrites as matches close.
 
 ```
 Browser (static, GitHub Pages)
-├─ index.html   → Status (clock-driven) · Sign up (encrypt) · Captain view (decrypt)
-└─ public.html  → anonymized spectator bracket
+├─ index.html   → the tournament: live stage (clock-driven), roadmap, anonymized bracket
+└─ captain.html → Sign up (encrypt) · Captain view (decrypt your own fixture)
 
 config/                        the state machine, as JSON
 ├─ tournament.json   schedule + phase boundaries + organizer PUBLIC key   (static)
@@ -60,7 +60,10 @@ The whole thing has **no build step** — vanilla ES modules, served as-is.
 
 ## Deploy it
 
-1. **Create a repo** from these files and push to `main`.
+1. **Create a repo** from these files and push to `main`. Name the repo
+   **`game-state`** so the site publishes at `https://<user>.github.io/game-state/`
+   with the public tournament view as the landing page. (All asset paths are
+   relative, so any repo name / base path works — the name only sets the URL.)
 2. **Enable Pages:** repo *Settings → Pages → Build and deployment → Source =
    GitHub Actions*.
 3. **Generate the organizer keypair** locally:
@@ -111,7 +114,7 @@ node advance.mjs sim                               # plays to a champion, then p
 ```
 
 Serve the site with any static server (e.g. `python3 -m http.server`) and open
-`index.html` / `public.html`.
+`index.html` (tournament) / `captain.html` (sign-up + captain).
 
 ---
 
