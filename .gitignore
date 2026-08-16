@@ -1,0 +1,11 @@
+# Organizer secret — NEVER commit
+tools/organizer.keys.json
+organizer.keys.json
+
+# Local test artifacts
+tools/fake-captains.json
+
+# OS / editor
+.DS_Store
+node_modules/
+*.log

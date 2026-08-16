@@ -1,0 +1,13 @@
+{
+  "name": "game-state-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Organizer-side CLI for game-state: generate keys, decrypt signups, advance the bracket.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "keygen": "node keygen.mjs",
+    "decrypt": "node decrypt-signups.mjs",
+    "advance": "node advance.mjs"
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "name": "The Autumn Gauntlet",
+  "tagline": "simple state-based tournaments",
+  "teamCount": 32,
+  "format": "single-elimination",
+  "organizerPublicKey": "eyJrZXlfb3BzIjpbXSwiZXh0Ijp0cnVlLCJrdHkiOiJFQyIsIngiOiJYd3AxcC1HWFlIeTkwbzV2Z0xaX3BmT05IZFZCNjEzbmhyeXdyajJtbUZjIiwieSI6IkpkWjJfejFEV2lITDFTTlhiWTdNSExTbG9OVTdORVRIU1ZvZUJPaV95QU0iLCJjcnYiOiJQLTI1NiJ9",
+  "signup": {
+    "channel": "github-issue",
+    "repo": "your-org/your-tournament",
+    "issueTitlePrefix": "signup"
+  },
+  "phases": [
+    {
+      "id": "signup",
+      "kind": "signup",
+      "label": "Registration",
+      "start": "2026-08-01T00:00:00Z",
+      "blurb": "Captains register their team. Entries are anonymous and encrypted."
+    },
+    {
+      "id": "groups",
+      "kind": "group",
+      "label": "Group Stage",
+      "start": "2026-09-01T00:00:00Z",
+      "blurb": "32 teams, 8 groups of 4. Top two advance."
+    },
+    {
+      "id": "r16",
+      "kind": "knockout",
+      "label": "Round of 16",
+      "start": "2026-09-15T00:00:00Z",
+      "blurb": "Single elimination begins."
+    },
+    {
+      "id": "quarterfinals",
+      "kind": "knockout",
+      "label": "Quarter-finals",
+      "start": "2026-09-22T00:00:00Z",
+      "blurb": "The final eight."
+    },
+    {
+      "id": "semifinals",
+      "kind": "knockout",
+      "label": "Semi-finals",
+      "start": "2026-09-29T00:00:00Z",
+      "blurb": "One match from the final."
+    },
+    {
+      "id": "final",
+      "kind": "knockout",
+      "label": "The Final",
+      "start": "2026-10-06T00:00:00Z",
+      "blurb": "Winner takes all."
+    },
+    {
+      "id": "complete",
+      "kind": "complete",
+      "label": "Champion Crowned",
+      "start": "2026-10-08T00:00:00Z",
+      "blurb": "The Gauntlet is decided."
+    }
+  ]
+}
