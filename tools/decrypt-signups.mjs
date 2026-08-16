@@ -31,6 +31,10 @@ for (const f of files) {
   try {
     const payload = JSON.parse(await unseal(m[1], priv));
     const fp = await fingerprint(payload.captainPublicKey);
+    const prior = byFp.get(fp);
+    if (prior && prior.captainPublicKey !== payload.captainPublicKey) {
+      console.warn(`⚠ Team-code collision on "${fp}" between two distinct keys — the later entry is dropped. Ask one captain to re-register for a fresh code.`);
+    }
     byFp.set(fp, { fp, captainPublicKey: payload.captainPublicKey }); // dedupe by fp
     ok++;
   } catch { bad++; }

@@ -22,8 +22,8 @@
 // JSON is thus updated per match and leaves nothing behind once complete.
 
 import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, readdirSync } from 'node:fs';
-import { seal } from '../js/crypto.js';
-import { p, seededRng, shuffle } from './lib.mjs';
+import { seal, unseal, boxSenderPub, publicRaw } from '../js/crypto.js';
+import { p, seededRng, shuffle, organizerPrivateKey } from './lib.mjs';
 
 const readJson = (f) => JSON.parse(readFileSync(p(...f), 'utf8'));
 const writeJson = (f, o) => writeFileSync(p(...f), JSON.stringify(o, null, 2) + '\n');
@@ -37,10 +37,11 @@ switch (cmd) {
   case 'result': await result(args[0], args[1]); break;
   case 'sim': await sim(); break;
   case 'render': await render(readState()); break;
+  case 'tally': await tally(); break;
   case 'purge': purge('manual purge'); break;
   case 'status': status(); break;
   default:
-    console.log('Usage: node advance.mjs <draw|result <matchId> <winnerFp>|sim|render|purge|status> [--seed S]');
+    console.log('Usage: node advance.mjs <draw|result <matchId> <winnerFp>|tally|sim|render|purge|status> [--seed S]');
 }
 
 // ---- bracket construction --------------------------------------------------
@@ -146,6 +147,9 @@ async function result(matchId, winnerFp) {
   const hit = findMatch(state, matchId);
   if (!hit) { console.error(`No match "${matchId}".`); process.exit(1); }
   const { round, match } = hit;
+  if (match.winner) {
+    console.log(`Match ${matchId} already decided (${match.winner}). No change.`); process.exit(0);
+  }
   if (match.a !== winnerFp && match.b !== winnerFp) {
     console.error(`"${winnerFp}" is not in match ${matchId} (${match.a} vs ${match.b}).`); process.exit(1);
   }
@@ -282,13 +286,92 @@ function renderPublic(state, teamCount) {
   });
 }
 
+// ---- score tally: two-captain consensus ------------------------------------
+//
+// Reads authenticated score reports from scores/, verifies each came from a real
+// participant of the match it names, and writes config/queue.json: a match is
+// `agreed` (ready for admin confirmation) only when BOTH captains reported and
+// their scores mirror each other. Conflicts are surfaced as `disputed`.
+
+async function tally() {
+  const state = readState();
+  if (!existsSync(p('state', 'teams.json'))) { console.error('No teams.'); process.exit(1); }
+  const priv = organizerPrivateKey();
+  const { teams } = readJson(['state', 'teams.json']);
+
+  // Map each captain's embedded public-key bytes -> fingerprint (identity).
+  const rawToFp = new Map();
+  for (const t of teams) rawToFp.set(await publicRaw(t.captainPublicKey), t.fp);
+
+  // Which teams are in which match (both sides known, not yet decided).
+  const matchSides = new Map();
+  for (const r of state.rounds) for (const m of r.matches) {
+    if (m.a && m.b && !m.winner) matchSides.set(m.id, { a: m.a, b: m.b, label: r.label });
+  }
+
+  // Collect the latest authenticated report per (matchId, reporterFp).
+  const reports = new Map(); // key `${matchId}|${fp}` -> { myScore, oppScore, ts }
+  const dir = p('scores');
+  const files = existsSync(dir) ? readdirSync(dir).filter((f) => !f.startsWith('.')) : [];
+  let accepted = 0, rejected = 0;
+  for (const f of files) {
+    const raw = readFileSync(p('scores', f), 'utf8');
+    const mm = raw.match(/([A-Za-z0-9_-]{100,})/);
+    if (!mm) { rejected++; continue; }
+    const blob = mm[1];
+    const fp = rawToFp.get(boxSenderPub(blob)); // identity from the embedded key
+    if (!fp) { rejected++; continue; }           // not a known participant key
+    let rep;
+    try { rep = JSON.parse(await unseal(blob, priv)); } catch { rejected++; continue; } // forged/garbled
+    const sides = matchSides.get(rep.matchId);
+    if (!sides || (sides.a !== fp && sides.b !== fp)) { rejected++; continue; } // not in that match
+    const my = Number(rep.myScore), opp = Number(rep.oppScore);
+    if (!Number.isInteger(my) || !Number.isInteger(opp) || my < 0 || opp < 0) { rejected++; continue; }
+    const key = `${rep.matchId}|${fp}`;
+    const prev = reports.get(key);
+    if (!prev || new Date(rep.ts) > new Date(prev.ts)) reports.set(key, { myScore: my, oppScore: opp, ts: rep.ts });
+    accepted++;
+  }
+
+  const queue = {};
+  for (const [id, sides] of matchSides) {
+    const ra = reports.get(`${id}|${sides.a}`);
+    const rb = reports.get(`${id}|${sides.b}`);
+    if (!ra && !rb) continue;
+    if (!ra || !rb) {
+      queue[id] = { label: sides.label, a: sides.a, b: sides.b, status: 'awaiting', reportedBy: ra ? sides.a : sides.b };
+      continue;
+    }
+    const mirror = ra.myScore === rb.oppScore && ra.oppScore === rb.myScore;
+    if (mirror && ra.myScore !== ra.oppScore) {
+      const winner = ra.myScore > ra.oppScore ? sides.a : sides.b;
+      queue[id] = { label: sides.label, a: sides.a, b: sides.b, status: 'agreed', scoreA: ra.myScore, scoreB: ra.oppScore, winner };
+    } else {
+      queue[id] = {
+        label: sides.label, a: sides.a, b: sides.b,
+        status: mirror ? 'tie' : 'disputed',
+        reports: { [sides.a]: { my: ra.myScore, opp: ra.oppScore }, [sides.b]: { my: rb.myScore, opp: rb.oppScore } },
+      };
+    }
+  }
+
+  writeJson(['config', 'queue.json'], {
+    schemaVersion: 1, generatedAt: new Date().toISOString(),
+    note: 'Match result queue. A match is "agreed" only when both captains report mirrored scores; the admin confirms it to advance the engine.',
+    matches: queue,
+  });
+  const agreed = Object.values(queue).filter((q) => q.status === 'agreed').length;
+  console.log(`Tallied ${accepted} report(s), ${rejected} rejected. Queue: ${Object.keys(queue).length} match(es), ${agreed} agreed & ready.`);
+}
+
 // ---- cascade purge ---------------------------------------------------------
 
 function purge(reason, champion = null) {
   // Cascade-delete every piece of stored data.
-  for (const dir of ['signups', 'state']) {
+  for (const dir of ['signups', 'scores', 'state']) {
     if (existsSync(p(dir))) { rmSync(p(dir), { recursive: true, force: true }); }
   }
+  writeJson(['config', 'queue.json'], { schemaVersion: 1, generatedAt: new Date().toISOString(), note: 'Tournament complete — queue cleared.', matches: {} });
   // Reduce the public config to an anonymized, blob-free completed record.
   writeJson(['config', 'bracket.json'], {
     schemaVersion: 1,

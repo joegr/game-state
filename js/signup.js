@@ -33,36 +33,32 @@ export async function renderSignup(root, tournament) {
 
   const form = el('form', { class: 'card' },
     el('h2', {}, 'Register your team'),
-    el('p', { class: 'muted' }, 'Pick a team name only your organizer will see. We generate a private captain key on your device and send an encrypted entry — no account, no email, no tracking.'),
-    el('label', {}, 'Team name',
-      el('input', { name: 'team', required: 'true', maxlength: '60', placeholder: 'e.g. Silent Foxes', class: 'input' })),
-    el('button', { type: 'submit', class: 'btn' }, 'Generate encrypted entry'),
+    el('p', { class: 'muted' }, 'No name to pick, no account, no email. We generate a private captain key on your device and assign your team a random four-character code — that anonymous code is your team throughout the tournament.'),
+    el('button', { type: 'submit', class: 'btn' }, 'Create my anonymous team'),
   );
   const out = el('div', { class: 'signup-out' });
   root.append(form, out);
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const teamName = form.team.value.trim();
-    if (!teamName) return;
     form.querySelector('button').disabled = true;
 
     const captain = await generateKeypair();
-    const fp = await fingerprint(captain.publicKey);
+    const fp = await fingerprint(captain.publicKey); // the 4-char team code
     const payload = JSON.stringify({
-      v: 1, teamName, captainPublicKey: captain.publicKey, ts: new Date().toISOString(),
+      v: 1, captainPublicKey: captain.publicKey, ts: new Date().toISOString(),
     });
     const sealed = await seal(payload, tournament.organizerPublicKey);
 
-    keyStore.save(tournament.name, { ...captain, fingerprint: fp, teamName });
+    keyStore.save(tournament.name, { ...captain, fingerprint: fp, teamName: fp });
 
-    renderSubmission(out, tournament, { sealed, fp, captain, teamName });
+    renderSubmission(out, tournament, { sealed, fp, captain });
   });
 }
 
-function renderSubmission(out, tournament, { sealed, fp, captain, teamName }) {
+function renderSubmission(out, tournament, { sealed, fp, captain }) {
   clear(out);
-  const body = `game-state signup\nfingerprint: ${fp}\n\n\`\`\`\n${sealed}\n\`\`\`\n`;
+  const body = `game-state signup\nteam: ${fp}\n\n\`\`\`\n${sealed}\n\`\`\`\n`;
   const repo = tournament.signup?.repo || 'your-org/your-tournament';
   const issueUrl = `https://github.com/${repo}/issues/new?title=${encodeURIComponent((tournament.signup?.issueTitlePrefix || 'signup') + ': ' + fp)}&body=${encodeURIComponent(body)}`;
 
@@ -71,7 +67,7 @@ function renderSubmission(out, tournament, { sealed, fp, captain, teamName }) {
 
   out.append(el('div', { class: 'card success' },
     el('h3', {}, 'Entry sealed ✓'),
-    el('p', {}, 'Your anonymous ID: ', el('code', { class: 'mono' }, fp)),
+    el('p', {}, 'Your team code: ', el('code', { class: 'mono big' }, fp)),
     el('p', { class: 'warn' }, '⚠ Save your captain key now. It is the ONLY way to view your progress and it cannot be recovered.'),
     el('div', { class: 'row' },
       el('a', { class: 'btn', href: dl, download: `game-state-${fp}.key.json` }, 'Download captain key'),

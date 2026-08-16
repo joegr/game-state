@@ -4,17 +4,24 @@ name: Deploy game-state to Pages
 # Everything the visitor needs is static; the "app" is just the config JSON.
 
 on:
+  # Human edits to the site / config.
   push:
     branches: [main]
     paths:
       - 'index.html'
       - 'captain.html'
+      - 'admin.html'
       - '404.html'
       - 'css/**'
       - 'js/**'
       - 'config/**'
       - '.nojekyll'
       - '.github/workflows/deploy.yml'
+  # The engine commits config JSON with GITHUB_TOKEN, which does NOT re-trigger
+  # `push` workflows. So redeploy whenever the engine run finishes instead.
+  workflow_run:
+    workflows: ['game-state engine']
+    types: [completed]
   workflow_dispatch:
 
 permissions:

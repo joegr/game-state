@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <meta name="description" content="game-state — organizer admin dashboard. Confirms matches and drives the tournament engine." />
+  <title>Admin · game-state</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🎲</span>
+      <span class="brand-text">
+        <span class="brand-name">game-state</span>
+        <span class="brand-tag">organizer admin · drives the engine</span>
+      </span>
+    </div>
+    <h1 id="tourney-name" class="tourney-name">Loading…</h1>
+  </header>
+  <main id="app"><div class="card"><p class="muted">Loading…</p></div></main>
+  <footer class="foot"><span>game-state · admin actions run through GitHub Actions; nothing is written from the browser except workflow dispatches</span></footer>
+  <script type="module" src="js/admin.js"></script>
+</body>
+</html>

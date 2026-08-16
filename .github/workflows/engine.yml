@@ -9,10 +9,11 @@ name: game-state engine
 # Requires repo secret ORGANIZER_PRIVATE_KEY (from `node keygen.mjs`).
 
 on:
-  # Ingest signup issues automatically a few times a day.
-  schedule:
-    - cron: '0 */6 * * *'
-  # Manual control for draw / results / simulation / purge.
+  # Event-driven ingestion: when a captain opens a signup / score issue, the
+  # engine collects + tallies. No polling timer — the change itself triggers it.
+  issues:
+    types: [opened, reopened]
+  # Manual control for draw / results / simulation / purge (from the admin dashboard).
   workflow_dispatch:
     inputs:
       action:
@@ -20,7 +21,7 @@ on:
         type: choice
         required: true
         default: collect
-        options: [collect, draw, result, sim, purge, status]
+        options: [collect, draw, result, tally, sim, purge, status]
       match_id:
         description: 'Match id (for action=result), e.g. r8-m1'
         required: false
@@ -58,36 +59,50 @@ jobs:
           echo "::error::ORGANIZER_PRIVATE_KEY secret is not set. Add it in repo Settings → Secrets → Actions."
           exit 1
 
+      # The tools write to repo root (state/, config/, signups/, scores/), so run
+      # from root. `gh` needs the `collected` label to exist before it can apply it.
+      - name: Ensure collected label
+        if: contains(fromJSON('["collect","draw","result","tally"]'), env.ACTION)
+        run: gh label create collected --color ededed --description "game-state ingested" --force || true
+
       - name: Run engine action
-        working-directory: tools
         run: |
           set -euo pipefail
           echo "Action: $ACTION"
+          MATCH_ID='${{ github.event.inputs.match_id }}'
+          WINNER='${{ github.event.inputs.winner_fp }}'
+          SEED='${{ github.event.inputs.seed }}'
           case "$ACTION" in
             collect)
-              node collect-issues.mjs || true
-              node decrypt-signups.mjs
+              # Ingest signups and score reports, then refresh the queue.
+              node tools/collect-issues.mjs --title signup --dir signups || true
+              node tools/collect-issues.mjs --title score  --dir scores  || true
+              node tools/decrypt-signups.mjs
+              if [ -f state/matches.json ]; then node tools/advance.mjs tally; fi
               ;;
             draw)
-              node collect-issues.mjs || true
-              node decrypt-signups.mjs
-              if [ -n "${{ github.event.inputs.seed }}" ]; then
-                node advance.mjs draw --seed "${{ github.event.inputs.seed }}"
-              else
-                node advance.mjs draw
-              fi
+              node tools/collect-issues.mjs --title signup --dir signups || true
+              node tools/decrypt-signups.mjs
+              if [ -n "$SEED" ]; then node tools/advance.mjs draw --seed "$SEED"; else node tools/advance.mjs draw; fi
               ;;
             result)
-              node advance.mjs result "${{ github.event.inputs.match_id }}" "${{ github.event.inputs.winner_fp }}"
+              node tools/advance.mjs result "$MATCH_ID" "$WINNER"
+              # Refresh the queue so the confirmed match drops off (state/ is gone if this was the final).
+              node tools/collect-issues.mjs --title score --dir scores || true
+              node tools/advance.mjs tally || true
+              ;;
+            tally)
+              node tools/collect-issues.mjs --title score --dir scores || true
+              node tools/advance.mjs tally
               ;;
             sim)
-              node advance.mjs sim
+              node tools/advance.mjs sim
               ;;
             purge)
-              node advance.mjs purge
+              node tools/advance.mjs purge
               ;;
             status)
-              node advance.mjs status
+              node tools/advance.mjs status
               ;;
             *)
               echo "Unknown action: $ACTION"; exit 1 ;;
@@ -98,7 +113,7 @@ jobs:
           set -euo pipefail
           git config user.name  "game-state[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A config signups state 2>/dev/null || true
+          git add -A config signups scores state 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No changes to commit."
           else
