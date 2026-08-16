@@ -4,10 +4,10 @@
   "tagline": "simple state-based tournaments",
   "teamCount": 32,
   "format": "single-elimination",
-  "organizerPublicKey": "eyJrZXlfb3BzIjpbXSwiZXh0Ijp0cnVlLCJrdHkiOiJFQyIsIngiOiJYd3AxcC1HWFlIeTkwbzV2Z0xaX3BmT05IZFZCNjEzbmhyeXdyajJtbUZjIiwieSI6IkpkWjJfejFEV2lITDFTTlhiWTdNSExTbG9OVTdORVRIU1ZvZUJPaV95QU0iLCJjcnYiOiJQLTI1NiJ9",
+  "organizerPublicKey": "",
   "signup": {
     "channel": "github-issue",
-    "repo": "your-org/your-tournament",
+    "repo": "joegr/game-state",
     "issueTitlePrefix": "signup"
   },
   "phases": [

@@ -10,6 +10,15 @@ import { generateKeypair, seal, fingerprint } from './crypto.js';
 
 export async function renderSignup(root, tournament) {
   clear(root);
+
+  if (!tournament.organizerPublicKey) {
+    root.append(el('div', { class: 'card' },
+      el('h2', {}, 'Registration not open yet'),
+      el('p', { class: 'muted' }, 'The organizer has not published a signup key for this tournament. Check back soon.'),
+    ));
+    return;
+  }
+
   const existing = keyStore.load(tournament.name);
 
   if (existing) {
