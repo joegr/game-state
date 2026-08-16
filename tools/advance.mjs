@@ -188,11 +188,13 @@ async function finish(state, msg) {
   }
 }
 
-// ---- public render: per-captain encrypted views ----------------------------
+// ---- public render: per-captain encrypted views + anonymized bracket -------
 
 async function render(state) {
   const teams = existsSync(p('state', 'teams.json')) ? readJson(['state', 'teams.json']).teams : [];
   const pubByFp = new Map(teams.map((t) => [t.fp, t.captainPublicKey]));
+
+  renderPublic(state, teams.length);
 
   // Find, for each team, their earliest undecided match (their "next fixture").
   const nextFixture = new Map();
@@ -251,6 +253,33 @@ async function render(state) {
 function currentPhaseId(state) {
   const undecided = state.rounds.find((r) => r.matches.some((m) => (m.a || m.b) && !m.winner));
   return undecided ? undecided.label : 'complete';
+}
+
+// The PUBLIC spectator bracket: the full tree, anonymized to opaque team IDs,
+// updated as matches close. No keys, no names, no encrypted blobs — safe for
+// everyone to see, and it survives the cascade purge as the historical record.
+function renderPublic(state, teamCount) {
+  const decided = state.rounds.reduce((n, r) => n + r.matches.filter((m) => m.winner).length, 0);
+  const total = state.rounds.reduce((n, r) => n + r.matches.length, 0);
+  writeJson(['config', 'public.json'], {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    tournament: tournament.name,
+    seed: state.seed || null,
+    format: state.format || 'single-elimination',
+    status: state.status,
+    activePhase: state.status === 'complete' ? 'complete' : currentPhaseId(state),
+    teamCount,
+    champion: state.champion || null,
+    matchesDecided: decided,
+    matchesTotal: total,
+    rounds: state.rounds.map((r) => ({
+      label: r.label,
+      slots: r.slots,
+      start: r.start || null,
+      matches: r.matches.map((m) => ({ id: m.id, a: m.a, b: m.b, winner: m.winner })),
+    })),
+  });
 }
 
 // ---- cascade purge ---------------------------------------------------------

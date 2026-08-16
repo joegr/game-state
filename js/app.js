@@ -86,6 +86,8 @@ function renderStatus(root) {
     ),
     el('p', { class: 'muted sm center' },
       'Everyone sees the same stage — the clock decides it. Your fixtures are private to your captain key.'),
+    el('p', { class: 'center' },
+      el('a', { class: 'btn ghost sm', href: 'public.html' }, 'View public bracket →')),
   );
 }
 

@@ -74,4 +74,19 @@ label { display: block; font-weight: 600; font-size: 13px; }
 .blob { white-space: pre-wrap; word-break: break-all; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-family: ui-monospace, monospace; font-size: 12px; }
 code.mono { background: var(--bg); padding: 2px 6px; border-radius: 6px; border: 1px solid var(--line); font-size: 13px; }
 
+/* public spectator bracket */
+.progress { height: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; margin: 10px 0; }
+.progress .bar { height: 100%; background: var(--accent); border-radius: 999px; transition: width .4s; }
+.bracket { display: flex; gap: 18px; overflow-x: auto; padding: 6px 2px 14px; }
+.bracket .col { min-width: 190px; display: flex; flex-direction: column; gap: 12px; }
+.col-head { position: sticky; top: 0; padding-bottom: 4px; }
+.bmatch { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; position: relative; }
+.bmatch.done { border-color: color-mix(in srgb, var(--good) 35%, var(--line)); }
+.bmatch .mid { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
+.team { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 5px 7px; border-radius: 7px; font-size: 13px; background: var(--bg); margin: 3px 0; border: 1px solid transparent; }
+.team.win { border-color: color-mix(in srgb, var(--good) 50%, transparent); color: var(--good); font-weight: 700; }
+.team.out { opacity: .5; text-decoration: line-through; }
+.team.empty { color: var(--muted); font-style: italic; }
+.team .check { color: var(--good); }
+
 .foot { color: var(--muted); font-size: 12px; text-align: center; padding: 30px 18px 40px; }

@@ -1,0 +1,43 @@
+name: Deploy game-state to Pages
+
+# Publishes the static site (index.html + js/ + css/ + config/) to GitHub Pages.
+# Everything the visitor needs is static; the "app" is just the config JSON.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'public.html'
+      - 'css/**'
+      - 'js/**'
+      - 'config/**'
+      - '.nojekyll'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel an in-flight deploy; let the running one finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          # Publish the repo root as-is — no build step.
+          path: '.'
+      - id: deployment
+        uses: actions/deploy-pages@v4

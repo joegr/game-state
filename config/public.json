@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": null,
+  "tournament": "The Autumn Gauntlet",
+  "seed": null,
+  "format": "single-elimination",
+  "status": "registration",
+  "activePhase": "signup",
+  "teamCount": 0,
+  "champion": null,
+  "matchesDecided": 0,
+  "matchesTotal": 0,
+  "rounds": [],
+  "note": "The draw has not happened yet. This anonymized bracket fills in once registration closes, and updates as each match closes."
+}

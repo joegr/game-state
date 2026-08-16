@@ -5,7 +5,8 @@ organizer.keys.json
 # Local test artifacts
 tools/fake-captains.json
 
-# OS / editor
+# Local dev / editor
+.claude/
 .DS_Store
 node_modules/
 *.log

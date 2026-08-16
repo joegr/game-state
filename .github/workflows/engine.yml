@@ -1,0 +1,107 @@
+name: game-state engine
+
+# The tournament state machine, run in CI. It owns the entire tournament as JSON
+# in the repo: it collects signups, draws the bracket, records results, rewrites
+# config/bracket.json on every mutation, and CASCADE-DELETES all stored data once
+# the final match is decided. A change to config/bracket.json re-triggers the
+# Pages deploy, so the served site always reflects the latest state.
+#
+# Requires repo secret ORGANIZER_PRIVATE_KEY (from `node keygen.mjs`).
+
+on:
+  # Ingest signup issues automatically a few times a day.
+  schedule:
+    - cron: '0 */6 * * *'
+  # Manual control for draw / results / simulation / purge.
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Engine action'
+        type: choice
+        required: true
+        default: collect
+        options: [collect, draw, result, sim, purge, status]
+      match_id:
+        description: 'Match id (for action=result), e.g. r8-m1'
+        required: false
+      winner_fp:
+        description: 'Winner fingerprint (for action=result)'
+        required: false
+      seed:
+        description: 'Draw seed (optional, for action=draw)'
+        required: false
+
+permissions:
+  contents: write   # commit updated JSON back to the repo
+  issues: write     # label + close collected signup issues
+
+concurrency:
+  group: game-state-engine
+  cancel-in-progress: false
+
+jobs:
+  engine:
+    runs-on: ubuntu-latest
+    env:
+      ORGANIZER_PRIVATE_KEY: ${{ secrets.ORGANIZER_PRIVATE_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      ACTION: ${{ github.event.inputs.action || 'collect' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Guard — private key present
+        if: env.ORGANIZER_PRIVATE_KEY == ''
+        run: |
+          echo "::error::ORGANIZER_PRIVATE_KEY secret is not set. Add it in repo Settings → Secrets → Actions."
+          exit 1
+
+      - name: Run engine action
+        working-directory: tools
+        run: |
+          set -euo pipefail
+          echo "Action: $ACTION"
+          case "$ACTION" in
+            collect)
+              node collect-issues.mjs || true
+              node decrypt-signups.mjs
+              ;;
+            draw)
+              node collect-issues.mjs || true
+              node decrypt-signups.mjs
+              if [ -n "${{ github.event.inputs.seed }}" ]; then
+                node advance.mjs draw --seed "${{ github.event.inputs.seed }}"
+              else
+                node advance.mjs draw
+              fi
+              ;;
+            result)
+              node advance.mjs result "${{ github.event.inputs.match_id }}" "${{ github.event.inputs.winner_fp }}"
+              ;;
+            sim)
+              node advance.mjs sim
+              ;;
+            purge)
+              node advance.mjs purge
+              ;;
+            status)
+              node advance.mjs status
+              ;;
+            *)
+              echo "Unknown action: $ACTION"; exit 1 ;;
+          esac
+
+      - name: Commit updated tournament JSON
+        run: |
+          set -euo pipefail
+          git config user.name  "game-state[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A config signups state 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "engine: ${ACTION} @ $(date -u +%FT%TZ)"
+            git push
+          fi
