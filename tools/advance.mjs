@@ -1,29 +1,25 @@
 #!/usr/bin/env node
 // game-state — the bracket state machine (organizer / CI side).
 //
-// This is what the GitHub Action runs. It owns the ENTIRE tournament as JSON in
-// the repo and rewrites it on every mutation:
+// Thin fs/crypto wrapper around the shared pure engine in ../js/engine.js (the
+// same module the browser admin console uses). It owns the tournament JSON:
 //
 //   state/teams.json      anonymized entrants  { fp, captainPublicKey }
 //   state/matches.json    the full bracket, every round & match (working state)
-//   config/bracket.json   PUBLIC output: per-captain encrypted views only
+//   config/public.json    anonymized public bracket
+//   config/bracket.json   per-captain ENCRYPTED views
+//   config/queue.json     two-captain score consensus queue
 //
-// Subcommands:
-//   draw [--seed S]              build the stochastic single-elim bracket
-//   result <matchId> <winnerFp>  record a result, advance the winner
-//   sim [--seed S]               auto-play the whole bracket (demo/testing)
-//   render                       regenerate config/bracket.json from state
-//   purge                        cascade-delete ALL stored data (signups/, state/)
-//   status                       print a summary
-//
-// After the FINAL match is decided, `result`/`sim` auto-purge: every piece of
-// stored data is cascade-deleted and config/bracket.json is reduced to an
-// anonymized champion record with no remaining encrypted blobs. The tournament
-// JSON is thus updated per match and leaves nothing behind once complete.
+// Subcommands: draw · result · sim · render · tally · purge · status
+// After the FINAL match, result/sim auto-purge all stored data.
 
 import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, readdirSync } from 'node:fs';
 import { seal, unseal, boxSenderPub, publicRaw } from '../js/crypto.js';
-import { p, seededRng, shuffle, organizerPrivateKey } from './lib.mjs';
+import {
+  buildDraw, applyResult, simAll, computeQueue, buildPublic, buildViews,
+  currentPhaseLabel, roundStartsFor, roundsForTeams,
+} from '../js/engine.js';
+import { p, organizerPrivateKey } from './lib.mjs';
 
 const readJson = (f) => JSON.parse(readFileSync(p(...f), 'utf8'));
 const writeJson = (f, o) => writeFileSync(p(...f), JSON.stringify(o, null, 2) + '\n');
@@ -44,349 +40,122 @@ switch (cmd) {
     console.log('Usage: node advance.mjs <draw|result <matchId> <winnerFp>|tally|sim|render|purge|status> [--seed S]');
 }
 
-// ---- bracket construction --------------------------------------------------
-
-function roundLabel(slots) {
-  return { 2: 'The Final', 4: 'Semi-finals', 8: 'Quarter-finals' }[slots] || `Round of ${slots}`;
-}
-
-// Align bracket rounds to the tournament schedule from the end, so the last
-// round lines up with the 'final' phase, etc. Returns a start ISO per round.
-function roundTimes(nRounds) {
-  const knockout = tournament.phases.filter((ph) => ph.kind !== 'signup' && ph.kind !== 'complete');
-  const tail = knockout.slice(Math.max(0, knockout.length - nRounds));
-  const times = tail.map((ph) => ph.start);
-  while (times.length < nRounds) times.unshift(times[0] || null); // pad front if few phases
-  return times;
-}
-
-async function draw() {
-  if (!existsSync(p('state', 'teams.json'))) {
-    console.error('No state/teams.json. Run decrypt-signups.mjs first.'); process.exit(1);
-  }
-  const { teams } = readJson(['state', 'teams.json']);
-  if (teams.length < 2) { console.error('Need at least 2 teams to draw.'); process.exit(1); }
-
-  const seed = flag('--seed', `${tournament.name}:${teams.length}:${Date.now()}`);
-  const rng = seededRng(seed);
-  const order = shuffle(teams.map((t) => t.fp), rng);
-
-  // Pad to next power of two with byes (null).
-  let size = 1; while (size < order.length) size *= 2;
-  const slots = [...order, ...Array(size - order.length).fill(null)];
-
-  const rounds = [];
-  let current = [];
-  for (let i = 0; i < slots.length; i += 2) current.push({ a: slots[i], b: slots[i + 1] });
-  let roundSlots = size;
-  const nRounds = Math.log2(size);
-  const times = roundTimes(nRounds);
-
-  for (let r = 0; r < nRounds; r++) {
-    const matches = current.map((m, i) => ({
-      id: `r${roundSlots}-m${i + 1}`, a: m.a ?? null, b: m.b ?? null, winner: null,
-    }));
-    // Auto-resolve byes in the first round.
-    if (r === 0) for (const m of matches) {
-      if (m.a && !m.b) m.winner = m.a;
-      if (m.b && !m.a) m.winner = m.b;
-    }
-    rounds.push({ slots: roundSlots, label: roundLabel(roundSlots), start: times[r], matches });
-    // Prepare the (empty) next round.
-    const next = [];
-    for (let i = 0; i < matches.length; i += 2) next.push({ a: null, b: null });
-    current = next; roundSlots /= 2;
-  }
-
-  const stateObj = {
-    seed, format: 'single-elimination', createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(), status: 'active', champion: null, rounds,
-  };
-  mkdirSync(p('state'), { recursive: true });
-  writeJson(['state', 'matches.json'], stateObj);
-  propagateByes(stateObj);
-  writeJson(['state', 'matches.json'], stateObj);
-  await render(stateObj);
-  console.log(`Drew ${order.length}-team bracket (seed "${seed}"), ${nRounds} rounds.`);
-  status();
-}
-
-// ---- results ---------------------------------------------------------------
-
 function readState() {
   if (!existsSync(p('state', 'matches.json'))) { console.error('No bracket yet. Run: node advance.mjs draw'); process.exit(1); }
   return readJson(['state', 'matches.json']);
 }
 
-function findMatch(state, id) {
-  for (let r = 0; r < state.rounds.length; r++) {
-    const m = state.rounds[r].matches.find((x) => x.id === id);
-    if (m) return { round: r, match: m };
-  }
-  return null;
-}
+async function draw() {
+  if (!existsSync(p('state', 'teams.json'))) { console.error('No state/teams.json. Run decrypt-signups.mjs first.'); process.exit(1); }
+  const { teams } = readJson(['state', 'teams.json']);
+  if (teams.length < 2) { console.error('Need at least 2 teams to draw.'); process.exit(1); }
 
-// Feed a decided match's winner into the correct slot of the next round.
-function feedForward(state, roundIdx, matchIdx) {
-  const m = state.rounds[roundIdx].matches[matchIdx];
-  const next = state.rounds[roundIdx + 1];
-  if (!next || !m.winner) return;
-  const nm = next.matches[Math.floor(matchIdx / 2)];
-  if (matchIdx % 2 === 0) nm.a = m.winner; else nm.b = m.winner;
-}
+  const seed = flag('--seed', `${tournament.name}:${teams.length}:${Date.now()}`);
+  const starts = roundStartsFor(tournament.phases, roundsForTeams(teams.length));
+  const state = buildDraw(teams.map((t) => t.fp), seed, starts);
 
-function propagateByes(state) {
-  for (let r = 0; r < state.rounds.length; r++) {
-    state.rounds[r].matches.forEach((m, i) => { if (m.winner) feedForward(state, r, i); });
-  }
+  mkdirSync(p('state'), { recursive: true });
+  writeJson(['state', 'matches.json'], state);
+  await render(state);
+  console.log(`Drew ${teams.length}-team bracket (seed "${seed}"), ${state.rounds.length} rounds.`);
+  status();
 }
 
 async function result(matchId, winnerFp) {
   if (!matchId || !winnerFp) { console.error('Usage: result <matchId> <winnerFp>'); process.exit(1); }
   const state = readState();
-  const hit = findMatch(state, matchId);
-  if (!hit) { console.error(`No match "${matchId}".`); process.exit(1); }
-  const { round, match } = hit;
-  if (match.winner) {
-    console.log(`Match ${matchId} already decided (${match.winner}). No change.`); process.exit(0);
-  }
-  if (match.a !== winnerFp && match.b !== winnerFp) {
-    console.error(`"${winnerFp}" is not in match ${matchId} (${match.a} vs ${match.b}).`); process.exit(1);
-  }
-  match.winner = winnerFp;
-  feedForward(state, round, state.rounds[round].matches.indexOf(match));
-  await finish(state, `${matchId} → ${winnerFp}`);
+  const r = applyResult(state, matchId, winnerFp);
+  if (!r.ok) { console.log(r.error); process.exit(r.error.includes('already decided') ? 0 : 1); }
+  await finish(state, `${matchId} → ${winnerFp}`, r);
 }
 
 async function sim() {
   if (!existsSync(p('state', 'matches.json'))) await draw();
   const state = readState();
-  const rng = seededRng((state.seed || 'sim') + ':sim');
-  for (let r = 0; r < state.rounds.length; r++) {
-    state.rounds[r].matches.forEach((m, i) => {
-      if (m.winner) return;
-      if (!m.a && !m.b) return;
-      m.winner = !m.b ? m.a : !m.a ? m.b : (rng() < 0.5 ? m.a : m.b);
-      feedForward(state, r, i);
-    });
-  }
-  await finish(state, 'simulated all rounds');
+  const r = simAll(state);
+  await finish(state, 'simulated all rounds', r);
 }
 
-// Persist a mutation, detect champion, auto-purge on completion.
-async function finish(state, msg) {
-  state.updatedAt = new Date().toISOString();
-  const final = state.rounds[state.rounds.length - 1].matches[0];
-  if (final && final.winner) {
-    state.status = 'complete';
-    state.champion = final.winner;
-  }
+async function finish(state, msg, result) {
   writeJson(['state', 'matches.json'], state);
   await render(state);
   console.log(`Applied: ${msg}`);
-  if (state.status === 'complete') {
-    console.log(`🏆 Champion decided: ${state.champion}`);
-    purge('tournament complete', state.champion);
+  if (result.complete) {
+    console.log(`🏆 Champion decided: ${result.champion}`);
+    purge('tournament complete', result.champion);
   } else {
     status();
   }
 }
 
-// ---- public render: per-captain encrypted views + anonymized bracket -------
-
+// Regenerate the public bracket + per-captain encrypted views from state.
 async function render(state) {
   const teams = existsSync(p('state', 'teams.json')) ? readJson(['state', 'teams.json']).teams : [];
+  writeJson(['config', 'public.json'], buildPublic(state, tournament.name, teams.length));
+
   const pubByFp = new Map(teams.map((t) => [t.fp, t.captainPublicKey]));
-
-  renderPublic(state, teams.length);
-
-  // Find, for each team, their earliest undecided match (their "next fixture").
-  const nextFixture = new Map();
-  const eliminated = new Set();
-  for (let r = 0; r < state.rounds.length; r++) {
-    for (const m of state.rounds[r].matches) {
-      for (const side of ['a', 'b']) {
-        const fp = m[side]; if (!fp) continue;
-        if (m.winner && m.winner !== fp) eliminated.add(fp);
-        if (!m.winner && !nextFixture.has(fp)) {
-          nextFixture.set(fp, {
-            phaseLabel: state.rounds[r].label,
-            opponent: side === 'a' ? m.b : m.a,
-            matchTime: state.rounds[r].start,
-            matchId: m.id,
-          });
-        }
-      }
-    }
-  }
-
+  const plaintext = buildViews(state, teams.map((t) => t.fp));
   const views = {};
-  for (const t of teams) {
-    let view;
-    if (state.champion === t.fp) {
-      view = { status: 'champion', phaseLabel: 'Champion' };
-    } else if (eliminated.has(t.fp) && !nextFixture.has(t.fp)) {
-      view = { status: 'eliminated', phaseLabel: 'Eliminated' };
-    } else if (nextFixture.has(t.fp)) {
-      const f = nextFixture.get(t.fp);
-      view = {
-        status: f.opponent ? 'scheduled' : 'bye',
-        phaseLabel: f.phaseLabel,
-        opponent: f.opponent || null,
-        matchTime: f.matchTime,
-        matchId: f.matchId,
-        instructions: f.opponent ? 'Play your match before the next stage begins.' : 'Opponent to be decided — sit tight.',
-      };
-    } else {
-      view = { status: 'scheduled', phaseLabel: 'Awaiting draw' };
-    }
-    views[t.fp] = await seal(JSON.stringify(view), pubByFp.get(t.fp));
-  }
+  for (const t of teams) views[t.fp] = await seal(JSON.stringify(plaintext[t.fp]), pubByFp.get(t.fp));
 
   writeJson(['config', 'bracket.json'], {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    activePhase: state.status === 'complete' ? 'complete' : currentPhaseId(state),
-    seed: state.seed || null,
-    teamCount: teams.length,
+    schemaVersion: 1, generatedAt: new Date().toISOString(),
+    activePhase: state.status === 'complete' ? 'complete' : currentPhaseLabel(state),
+    seed: state.seed || null, teamCount: teams.length,
     note: 'Per-captain encrypted views. Each captain can decrypt only their own entry.',
     views,
   });
 }
 
-function currentPhaseId(state) {
-  const undecided = state.rounds.find((r) => r.matches.some((m) => (m.a || m.b) && !m.winner));
-  return undecided ? undecided.label : 'complete';
-}
-
-// The PUBLIC spectator bracket: the full tree, anonymized to opaque team IDs,
-// updated as matches close. No keys, no names, no encrypted blobs — safe for
-// everyone to see, and it survives the cascade purge as the historical record.
-function renderPublic(state, teamCount) {
-  const decided = state.rounds.reduce((n, r) => n + r.matches.filter((m) => m.winner).length, 0);
-  const total = state.rounds.reduce((n, r) => n + r.matches.length, 0);
-  writeJson(['config', 'public.json'], {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    tournament: tournament.name,
-    seed: state.seed || null,
-    format: state.format || 'single-elimination',
-    status: state.status,
-    activePhase: state.status === 'complete' ? 'complete' : currentPhaseId(state),
-    teamCount,
-    champion: state.champion || null,
-    matchesDecided: decided,
-    matchesTotal: total,
-    rounds: state.rounds.map((r) => ({
-      label: r.label,
-      slots: r.slots,
-      start: r.start || null,
-      matches: r.matches.map((m) => ({ id: m.id, a: m.a, b: m.b, winner: m.winner })),
-    })),
-  });
-}
-
-// ---- score tally: two-captain consensus ------------------------------------
-//
-// Reads authenticated score reports from scores/, verifies each came from a real
-// participant of the match it names, and writes config/queue.json: a match is
-// `agreed` (ready for admin confirmation) only when BOTH captains reported and
-// their scores mirror each other. Conflicts are surfaced as `disputed`.
-
+// Two-captain consensus: decrypt + authenticate score reports, then let the
+// engine compute the queue.
 async function tally() {
   const state = readState();
   if (!existsSync(p('state', 'teams.json'))) { console.error('No teams.'); process.exit(1); }
   const priv = organizerPrivateKey();
   const { teams } = readJson(['state', 'teams.json']);
 
-  // Map each captain's embedded public-key bytes -> fingerprint (identity).
   const rawToFp = new Map();
   for (const t of teams) rawToFp.set(await publicRaw(t.captainPublicKey), t.fp);
 
-  // Which teams are in which match (both sides known, not yet decided).
-  const matchSides = new Map();
-  for (const r of state.rounds) for (const m of r.matches) {
-    if (m.a && m.b && !m.winner) matchSides.set(m.id, { a: m.a, b: m.b, label: r.label });
-  }
-
-  // Collect the latest authenticated report per (matchId, reporterFp).
-  const reports = new Map(); // key `${matchId}|${fp}` -> { myScore, oppScore, ts }
   const dir = p('scores');
   const files = existsSync(dir) ? readdirSync(dir).filter((f) => !f.startsWith('.')) : [];
+  const reports = [];
   let accepted = 0, rejected = 0;
   for (const f of files) {
-    const raw = readFileSync(p('scores', f), 'utf8');
-    const mm = raw.match(/([A-Za-z0-9_-]{100,})/);
+    const mm = readFileSync(p('scores', f), 'utf8').match(/([A-Za-z0-9_-]{100,})/);
     if (!mm) { rejected++; continue; }
-    const blob = mm[1];
-    const fp = rawToFp.get(boxSenderPub(blob)); // identity from the embedded key
-    if (!fp) { rejected++; continue; }           // not a known participant key
+    const reporterFp = rawToFp.get(boxSenderPub(mm[1])); // identity from the embedded key
+    if (!reporterFp) { rejected++; continue; }
     let rep;
-    try { rep = JSON.parse(await unseal(blob, priv)); } catch { rejected++; continue; } // forged/garbled
-    const sides = matchSides.get(rep.matchId);
-    if (!sides || (sides.a !== fp && sides.b !== fp)) { rejected++; continue; } // not in that match
-    const my = Number(rep.myScore), opp = Number(rep.oppScore);
-    if (!Number.isInteger(my) || !Number.isInteger(opp) || my < 0 || opp < 0) { rejected++; continue; }
-    const key = `${rep.matchId}|${fp}`;
-    const prev = reports.get(key);
-    if (!prev || new Date(rep.ts) > new Date(prev.ts)) reports.set(key, { myScore: my, oppScore: opp, ts: rep.ts });
+    try { rep = JSON.parse(await unseal(mm[1], priv)); } catch { rejected++; continue; }
+    reports.push({ reporterFp, matchId: rep.matchId, myScore: rep.myScore, oppScore: rep.oppScore, ts: rep.ts });
     accepted++;
   }
 
-  const queue = {};
-  for (const [id, sides] of matchSides) {
-    const ra = reports.get(`${id}|${sides.a}`);
-    const rb = reports.get(`${id}|${sides.b}`);
-    if (!ra && !rb) continue;
-    if (!ra || !rb) {
-      queue[id] = { label: sides.label, a: sides.a, b: sides.b, status: 'awaiting', reportedBy: ra ? sides.a : sides.b };
-      continue;
-    }
-    const mirror = ra.myScore === rb.oppScore && ra.oppScore === rb.myScore;
-    if (mirror && ra.myScore !== ra.oppScore) {
-      const winner = ra.myScore > ra.oppScore ? sides.a : sides.b;
-      queue[id] = { label: sides.label, a: sides.a, b: sides.b, status: 'agreed', scoreA: ra.myScore, scoreB: ra.oppScore, winner };
-    } else {
-      queue[id] = {
-        label: sides.label, a: sides.a, b: sides.b,
-        status: mirror ? 'tie' : 'disputed',
-        reports: { [sides.a]: { my: ra.myScore, opp: ra.oppScore }, [sides.b]: { my: rb.myScore, opp: rb.oppScore } },
-      };
-    }
-  }
-
+  const queue = computeQueue(state, reports);
   writeJson(['config', 'queue.json'], {
     schemaVersion: 1, generatedAt: new Date().toISOString(),
-    note: 'Match result queue. A match is "agreed" only when both captains report mirrored scores; the admin confirms it to advance the engine.',
+    note: 'Match result queue. A match is "agreed" only when both captains report mirrored scores; the admin confirms it to advance.',
     matches: queue,
   });
   const agreed = Object.values(queue).filter((q) => q.status === 'agreed').length;
   console.log(`Tallied ${accepted} report(s), ${rejected} rejected. Queue: ${Object.keys(queue).length} match(es), ${agreed} agreed & ready.`);
 }
 
-// ---- cascade purge ---------------------------------------------------------
-
 function purge(reason, champion = null) {
-  // Cascade-delete every piece of stored data.
   for (const dir of ['signups', 'scores', 'state']) {
-    if (existsSync(p(dir))) { rmSync(p(dir), { recursive: true, force: true }); }
+    if (existsSync(p(dir))) rmSync(p(dir), { recursive: true, force: true });
   }
   writeJson(['config', 'queue.json'], { schemaVersion: 1, generatedAt: new Date().toISOString(), note: 'Tournament complete — queue cleared.', matches: {} });
-  // Reduce the public config to an anonymized, blob-free completed record.
   writeJson(['config', 'bracket.json'], {
-    schemaVersion: 1,
-    generatedAt: new Date().toISOString(),
-    activePhase: 'complete',
-    completed: true,
-    champion: champion,
-    teamCount: 0,
+    schemaVersion: 1, generatedAt: new Date().toISOString(), activePhase: 'complete',
+    completed: true, champion, teamCount: 0,
     note: `Tournament complete (${reason}). All stored data cascade-deleted; no per-captain data remains.`,
     views: {},
   });
-  console.log(`🧹 Cascade purge (${reason}): removed signups/ and state/; config/bracket.json reset to champion record.`);
+  console.log(`🧹 Cascade purge (${reason}): removed signups/ scores/ state/; bracket.json reset to champion record.`);
 }
-
-// ---- status ----------------------------------------------------------------
 
 function status() {
   if (!existsSync(p('state', 'matches.json'))) {
@@ -396,17 +165,11 @@ function status() {
   }
   const state = readState();
   console.log(`\nSeed: ${state.seed}`);
-  for (const r of state.rounds) {
-    const done = r.matches.filter((m) => m.winner).length;
-    console.log(`  ${r.label.padEnd(16)} ${done}/${r.matches.length} decided`);
-  }
+  for (const r of state.rounds) console.log(`  ${r.label.padEnd(16)} ${r.matches.filter((m) => m.winner).length}/${r.matches.length} decided`);
   console.log(state.status === 'complete' ? `Champion: ${state.champion}` : 'In progress.');
-  // List the next actionable matches.
   const live = state.rounds.find((r) => r.matches.some((m) => m.a && m.b && !m.winner));
   if (live) {
     console.log(`\nPending in ${live.label}:`);
-    for (const m of live.matches.filter((x) => x.a && x.b && !x.winner)) {
-      console.log(`  ${m.id}:  ${m.a}  vs  ${m.b}`);
-    }
+    for (const m of live.matches.filter((x) => x.a && x.b && !x.winner)) console.log(`  ${m.id}:  ${m.a}  vs  ${m.b}`);
   }
 }

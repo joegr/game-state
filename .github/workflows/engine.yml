@@ -1,32 +1,27 @@
 name: game-state engine
 
-# The tournament state machine, run in CI. It owns the entire tournament as JSON
-# in the repo: it collects signups, draws the bracket, records results, rewrites
-# config/bracket.json on every mutation, and CASCADE-DELETES all stored data once
-# the final match is decided. A change to config/bracket.json re-triggers the
-# Pages deploy, so the served site always reflects the latest state.
+# OPTIONAL CI path. The primary flow is the browser admin console (admin.html),
+# which decrypts/tallies with the organizer key client-side and exports the
+# config JSON for you to commit. This workflow is a convenience for running the
+# same engine in CI on blobs you have committed under signups/ and scores/.
 #
-# Requires repo secret ORGANIZER_PRIVATE_KEY (from `node keygen.mjs`).
+# It is manual-only (workflow_dispatch) — submissions arrive out-of-band as
+# sealed blobs, not GitHub issues. Requires repo secret ORGANIZER_PRIVATE_KEY.
 
 on:
-  # Event-driven ingestion: when a captain opens a signup / score issue, the
-  # engine collects + tallies. No polling timer — the change itself triggers it.
-  issues:
-    types: [opened, reopened]
-  # Manual control for draw / results / simulation / purge (from the admin dashboard).
   workflow_dispatch:
     inputs:
       action:
         description: 'Engine action'
         type: choice
         required: true
-        default: collect
-        options: [collect, draw, result, tally, sim, purge, status]
+        default: tally
+        options: [draw, result, tally, sim, purge, status]
       match_id:
         description: 'Match id (for action=result), e.g. r8-m1'
         required: false
       winner_fp:
-        description: 'Winner fingerprint (for action=result)'
+        description: 'Winner team code (for action=result)'
         required: false
       seed:
         description: 'Draw seed (optional, for action=draw)'
@@ -34,7 +29,6 @@ on:
 
 permissions:
   contents: write   # commit updated JSON back to the repo
-  issues: write     # label + close collected signup issues
 
 concurrency:
   group: game-state-engine
@@ -45,8 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ORGANIZER_PRIVATE_KEY: ${{ secrets.ORGANIZER_PRIVATE_KEY }}
-      GH_TOKEN: ${{ github.token }}
-      ACTION: ${{ github.event.inputs.action || 'collect' }}
+      ACTION: ${{ github.event.inputs.action }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -59,12 +52,8 @@ jobs:
           echo "::error::ORGANIZER_PRIVATE_KEY secret is not set. Add it in repo Settings → Secrets → Actions."
           exit 1
 
-      # The tools write to repo root (state/, config/, signups/, scores/), so run
-      # from root. `gh` needs the `collected` label to exist before it can apply it.
-      - name: Ensure collected label
-        if: contains(fromJSON('["collect","draw","result","tally"]'), env.ACTION)
-        run: gh label create collected --color ededed --description "game-state ingested" --force || true
-
+      # Operates on blobs committed under signups/ and scores/. Tools resolve paths
+      # from repo root, so run from root.
       - name: Run engine action
         run: |
           set -euo pipefail
@@ -73,39 +62,22 @@ jobs:
           WINNER='${{ github.event.inputs.winner_fp }}'
           SEED='${{ github.event.inputs.seed }}'
           case "$ACTION" in
-            collect)
-              # Ingest signups and score reports, then refresh the queue.
-              node tools/collect-issues.mjs --title signup --dir signups || true
-              node tools/collect-issues.mjs --title score  --dir scores  || true
-              node tools/decrypt-signups.mjs
-              if [ -f state/matches.json ]; then node tools/advance.mjs tally; fi
-              ;;
             draw)
-              node tools/collect-issues.mjs --title signup --dir signups || true
               node tools/decrypt-signups.mjs
               if [ -n "$SEED" ]; then node tools/advance.mjs draw --seed "$SEED"; else node tools/advance.mjs draw; fi
               ;;
             result)
               node tools/advance.mjs result "$MATCH_ID" "$WINNER"
-              # Refresh the queue so the confirmed match drops off (state/ is gone if this was the final).
-              node tools/collect-issues.mjs --title score --dir scores || true
               node tools/advance.mjs tally || true
               ;;
             tally)
-              node tools/collect-issues.mjs --title score --dir scores || true
+              node tools/decrypt-signups.mjs || true
               node tools/advance.mjs tally
               ;;
-            sim)
-              node tools/advance.mjs sim
-              ;;
-            purge)
-              node tools/advance.mjs purge
-              ;;
-            status)
-              node tools/advance.mjs status
-              ;;
-            *)
-              echo "Unknown action: $ACTION"; exit 1 ;;
+            sim)    node tools/advance.mjs sim ;;
+            purge)  node tools/advance.mjs purge ;;
+            status) node tools/advance.mjs status ;;
+            *)      echo "Unknown action: $ACTION"; exit 1 ;;
           esac
 
       - name: Commit updated tournament JSON

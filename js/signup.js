@@ -58,10 +58,6 @@ export async function renderSignup(root, tournament) {
 
 export function renderSubmission(out, tournament, { sealed, fp, captain }) {
   clear(out);
-  const body = `game-state signup\nteam: ${fp}\n\n\`\`\`\n${sealed}\n\`\`\`\n`;
-  const repo = tournament.signup?.repo || 'your-org/your-tournament';
-  const issueUrl = `https://github.com/${repo}/issues/new?title=${encodeURIComponent((tournament.signup?.issueTitlePrefix || 'signup') + ': ' + fp)}&body=${encodeURIComponent(body)}`;
-
   const backup = JSON.stringify({ tournament: tournament.name, ...captain, fingerprint: fp }, null, 2);
   const dl = URL.createObjectURL(new Blob([backup], { type: 'application/json' }));
 
@@ -75,11 +71,8 @@ export function renderSubmission(out, tournament, { sealed, fp, captain }) {
     ),
     el('hr', {}),
     el('h4', {}, 'Submit your entry'),
-    el('p', { class: 'muted' }, 'Send the encrypted blob to the organizer via a GitHub issue (opens pre-filled):'),
-    el('div', { class: 'row' },
-      el('a', { class: 'btn', href: issueUrl, target: '_blank', rel: 'noopener' }, 'Open pre-filled GitHub issue'),
-      el('button', { class: 'btn ghost', onclick: async (e) => { e.target.textContent = (await copy(sealed)) ? 'Copied ✓' : 'Copy failed'; } }, 'Copy encrypted blob'),
-    ),
-    el('details', {}, el('summary', {}, 'Show encrypted entry'), el('pre', { class: 'blob' }, sealed)),
+    el('p', { class: 'muted' }, 'Send this sealed entry to the organizer through your tournament channel. Only they can open it.'),
+    el('pre', { class: 'blob' }, sealed),
+    el('button', { class: 'btn', onclick: async (e) => { e.target.textContent = (await copy(sealed)) ? 'Copied ✓' : 'Copy failed'; } }, 'Copy sealed entry'),
   ));
 }

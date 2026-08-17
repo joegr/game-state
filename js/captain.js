@@ -119,16 +119,11 @@ function renderScoreReport(view, key, tournament) {
 
 function renderScoreSubmission(out, tournament, view, key, sealed, my, op) {
   clear(out);
-  const repo = tournament.signup?.repo || 'your-org/your-tournament';
-  const title = `score: ${view.matchId} (${key.fingerprint})`;
-  const body = `game-state score report\nmatch: ${view.matchId}\n\n\`\`\`\n${sealed}\n\`\`\`\n`;
-  const issueUrl = `https://github.com/${repo}/issues/new?title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`;
   out.append(el('div', { class: 'card success' },
-    el('p', {}, 'Score sealed: ', el('strong', {}, `${my}–${op}`), '. Submit it to the organizer:'),
-    el('div', { class: 'row' },
-      el('a', { class: 'btn', href: issueUrl, target: '_blank', rel: 'noopener' }, 'Open pre-filled GitHub issue'),
-      el('button', { class: 'btn ghost', onclick: async (e) => { e.target.textContent = (await copy(sealed)) ? 'Copied ✓' : 'Copy failed'; } }, 'Copy blob'),
-    ),
+    el('p', {}, 'Score sealed: ', el('strong', {}, `${my}–${op}`), ' for ', el('code', { class: 'mono' }, view.matchId), '.'),
+    el('p', { class: 'muted sm' }, 'Send this sealed report to the organizer. Only they can open it, and it advances the match only if your opponent reports the same score.'),
+    el('pre', { class: 'blob' }, sealed),
+    el('button', { class: 'btn', onclick: async (e) => { e.target.textContent = (await copy(sealed)) ? 'Copied ✓' : 'Copy failed'; } }, 'Copy report'),
   ));
 }
 
