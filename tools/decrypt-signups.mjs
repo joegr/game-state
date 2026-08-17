@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // game-state — decrypt collected signups into an ANONYMIZED team list.
 //
-// Reads every sealed blob under signups/ (one per file; the collect workflow
-// drops issue bodies here), decrypts with the organizer private key, and writes
-// state/teams.json holding ONLY { fp, captainPublicKey } per team.
+// Part of the OPTIONAL CLI/CI path (the browser console at admin.html is the
+// primary flow). Reads every sealed signup blob you have committed under
+// signups/ (one per file), decrypts with the organizer private key, and writes
+// state/teams.json holding ONLY { code, captainPublicKey } per team.
 //
-// The plaintext team name is intentionally discarded: the organizer never needs
-// it (teams are opaque fingerprints everywhere), and the captain already holds
-// their own name locally. Nothing that could deanonymize a captain is persisted.
+// There is no plaintext name to discard — a team is its 4-char code, derived
+// from the captain key. Nothing that could deanonymize a captain is persisted.
 //
 // Usage:  node decrypt-signups.mjs
 
@@ -25,7 +25,7 @@ let ok = 0, bad = 0;
 
 for (const f of files) {
   const raw = readFileSync(p('signups', f), 'utf8');
-  // Accept a raw blob or a fenced ```blob``` from an issue body.
+  // Accept a raw blob or a fenced ```blob```.
   const m = raw.match(/```\s*([A-Za-z0-9_-]{80,})\s*```/) || raw.match(/([A-Za-z0-9_-]{80,})/);
   if (!m) { bad++; continue; }
   try {

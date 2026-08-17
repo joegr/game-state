@@ -140,8 +140,8 @@ export async function authSeal(message, senderPrivStr, senderPubStr, recipientPu
 
 // ---- passphrase vault (for the admin dashboard) ---------------------------
 //
-// Encrypt a secret (e.g. a GitHub token) at rest with a passphrase, so the
-// admin "login" is a single passphrase that unlocks a locally-stored token.
+// Encrypt a secret (the organizer private key) at rest with a passphrase, so the
+// admin "login" is a single passphrase that unlocks the locally-stored key.
 // PBKDF2-SHA256 (210k iters) → AES-256-GCM. Nothing leaves the device.
 
 async function passphraseKey(passphrase, salt) {

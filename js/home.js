@@ -5,7 +5,7 @@
 // • Everyone else → a clean one-line, one-button anonymous captain sign-up.
 //
 // The vault check is just routing convenience, not security: the dashboard is
-// still gated by the passphrase + GitHub token regardless of where you land.
+// still gated by the passphrase + organizer key regardless of where you land.
 
 import { loadTournament } from './config.js';
 import { el, clear, keyStore } from './util.js';

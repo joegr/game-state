@@ -1,40 +1,38 @@
 # 🎲 game-state
 
 **simple state-based tournaments** — a lightweight, serverless tournament engine
-that lives entirely as static files and JSON configuration on GitHub Pages.
+that lives entirely as static files and JSON on GitHub Pages.
 
-No database. No backend. The tournament *is* a state machine whose transitions
-are driven by the clock and by a handful of JSON files that GitHub Actions
-rewrites as matches close.
+No database, no backend, no accounts, no tokens. The tournament *is* a state
+machine: its stage is driven by the clock, and its bracket is a handful of JSON
+files. The **organizer** is the only privileged role, and the only thing that
+makes them the organizer is possession of one private key.
 
-- **Time-based state machine** — the current stage (registration → group stage →
-  knockouts → final) is a *pure function of the current time* versus the phase
-  boundaries in [`config/tournament.json`](config/tournament.json). Every visitor
-  computes the same state from the same static config.
-- **Anonymous, encrypted signups** — captains register from the served page. Each
+- **Time-based stage** — registration → group stage → knockouts → final is a
+  *pure function of the clock* versus the phase boundaries in
+  [`config/tournament.json`](config/tournament.json). Every visitor computes the
+  same stage from the same static config.
+- **Anonymous, encrypted, key-only** — captains register from the page; each
   entry is sealed to the organizer's public key with WebCrypto (ECDH P-256 →
-  HKDF → AES-GCM). No accounts, no email, no tracking. There are no chosen names:
-  every team is a random **four-character code** (`A–Z0–9`) derived from its key.
-- **Three views of the same tournament:**
-  - **Public tournament view** (anonymous) — the landing page: live stage, roadmap,
-    and the whole bracket as opaque team codes, updated as each match closes.
-  - **Captain view** (private) — a captain loads their key and decrypts *only
-    their own* fixture: their next opponent, stage, and match time, and reports
-    their score. No captain can enumerate the field.
-  - **Admin dashboard** (organizer) — a single passphrase-locked login that drives
-    the engine: confirm results, run the draw, watch engine runs.
-- **Triple-confirmation results** — a match only advances when **both captains**
-  independently report **matching** scores (authenticated with their captain key,
-  so neither can forge the other) **and** the admin confirms. Disagreements are
-  flagged for manual resolution.
-- **Event-driven engine** — no polling timer: opening a signup/score issue
-  triggers ingestion; the admin dashboard dispatches draws and confirmations.
-- **Cascade purge** — once the final is decided, the engine deletes every piece
-  of stored data (signups, score reports, decrypted entries, per-captain blobs),
-  leaving only the anonymized public bracket as the historical record.
+  HKDF → AES-GCM). There are no names: a team is a random **four-character code**
+  (`A–Z0–9`) derived from its key. Submissions are sealed blobs you send the
+  organizer through your own channel (Discord, chat, email) — nothing is posted
+  publicly and no third-party service is involved.
+- **Three views:**
+  - **Public bracket** (`bracket.html`) — the anonymized tree by team code,
+    updated as matches close.
+  - **Captain view** (`captain.html`) — a captain loads their key and decrypts
+    *only their own* fixture, and reports their score. No captain can enumerate
+    the field.
+  - **Organizer console** (`admin.html`) — unlocked with the organizer private
+    key; decrypts blobs, runs the draw, confirms results, exports the JSON.
+- **Triple-confirmation results** — a match advances only when **both captains**
+  independently report **matching** scores (each report is authenticated with
+  the captain's key, so neither can forge the other) **and** the organizer
+  confirms. Disagreements are flagged for manual resolution.
 
 > An Elo-tracking module is planned to sit alongside this; for now the focus is
-> the time-based state machine and its GitHub Actions deployment.
+> the time-based state machine and its static, key-only operation.
 
 ---
 
@@ -42,143 +40,125 @@ rewrites as matches close.
 
 ```
 Browser (static, GitHub Pages)
-├─ index.html   → the tournament: live stage (clock-driven), roadmap, anonymized bracket
-├─ captain.html → Sign up (encrypt) · Captain view (decrypt fixture, report score)
-└─ admin.html   → organizer dashboard: passphrase login, confirm results, drive the engine
+├─ index.html    dispatcher → organizer's device goes to admin; everyone else gets
+│                a one-line, one-button anonymous sign-up          (js/home.js)
+├─ bracket.html  public anonymized bracket + live stage + roadmap  (js/tournament.js)
+├─ captain.html  sign up (seal a blob) · captain view · report score (js/app.js …)
+└─ admin.html    organizer console — the whole engine, client-side  (js/admin.js)
 
-config/                        the state machine, as JSON
-├─ tournament.json   schedule + phase boundaries + organizer PUBLIC key   (static)
-├─ bracket.json      per-captain ENCRYPTED views                          (engine-written)
-├─ public.json       anonymized full bracket, updated per match           (engine-written)
-└─ queue.json        result queue: agreed / disputed / awaiting per match (engine-written)
+js/
+├─ engine.js   the PURE tournament engine (draw, advance, consensus) — no I/O
+├─ crypto.js   sealed + authenticated boxes, team codes, passphrase vault
+└─ …           the SAME engine.js / crypto.js run in the browser AND in Node
 
-tools/  (organizer / CI)
+config/                        the tournament, as JSON
+├─ tournament.json   schedule + phase boundaries + organizer PUBLIC key   (you set)
+├─ public.json       anonymized bracket, updated per match                (exported)
+├─ bracket.json      per-captain ENCRYPTED views                          (exported)
+└─ queue.json        two-captain score-consensus queue                    (exported)
+
+tools/  (OPTIONAL CLI — the console does all this in the browser)
 ├─ keygen.mjs          generate the organizer keypair
-├─ collect-issues.mjs  pull signup / score issues (by title) → signups/ , scores/
-├─ decrypt-signups.mjs signups/ → state/teams.json  (anonymized: code + pubkey only)
-├─ advance.mjs         draw · result · tally · sim · purge · status  (the bracket engine)
-└─ lib.mjs, crypto.js  shared (crypto.js is the SAME module the browser uses)
+├─ decrypt-signups.mjs committed signups/ blobs → state/teams.json
+└─ advance.mjs         draw · result · tally · sim · purge · status
 
+test/   node:test suite (npm test) — engine + crypto
 .github/workflows/
-├─ deploy.yml   publish the static site to GitHub Pages
-└─ engine.yml   event-driven: ingest on new issues; dispatch draw/result/… ; auto-purge
+├─ deploy.yml   publish the static site to GitHub Pages (on push)
+└─ engine.yml   OPTIONAL manual workflow_dispatch to run the CLI engine in CI
 ```
 
-The whole thing has **no build step** — vanilla ES modules, served as-is.
+No build step — vanilla ES modules, served as-is.
 
 ---
 
-## Deploy it
+## Set it up
 
-1. **Create a repo** from these files and push to `main`. Name the repo
-   **`game-state`** so the site publishes at `https://<user>.github.io/game-state/`
-   with the public tournament view as the landing page. (All asset paths are
-   relative, so any repo name / base path works — the name only sets the URL.)
-2. **Enable Pages:** repo *Settings → Pages → Build and deployment → Source =
-   GitHub Actions*.
-3. **Generate the organizer keypair** locally:
+1. **Create the repo** from these files. Name it **`game-state`** so the site
+   publishes at `https://<user>.github.io/game-state/`. (All paths are relative,
+   so any name works — the name only sets the URL.)
+2. **Generate your organizer keypair:**
    ```bash
    cd tools && node keygen.mjs
    ```
-   - Paste the **public** key into `config/tournament.json → organizerPublicKey`.
-   - Add the **private** key as a repo secret named `ORGANIZER_PRIVATE_KEY`
-     (*Settings → Secrets and variables → Actions*). Never commit it.
-4. **Configure the tournament** in `config/tournament.json`: `name`, `teamCount`,
-   the `signup.repo` (`owner/name` used for the pre-filled issue link), and the
-   `phases` with their UTC `start` times.
-5. **Push.** The `deploy` workflow publishes the site. Registration opens
-   automatically when the wall clock passes the `signup` phase's `start`.
+   Paste the **public** key into `config/tournament.json → organizerPublicKey`.
+   Keep the **private** key safe — you load it into the console (below); it is
+   never committed. (`node keygen.mjs --json > organizer.keys.json` is gitignored
+   and can be uploaded directly in `admin.html`.)
+3. **Configure the tournament** in `config/tournament.json`: `name`, `teamCount`,
+   and the `phases` with their UTC `start` times.
+4. **Enable Pages:** *Settings → Pages → Source = GitHub Actions*, then push.
+   Registration opens automatically when the clock passes the `signup` phase.
 
 ---
 
 ## Run a tournament
 
-The organizer works from the **admin dashboard** at `admin.html`:
+Everything the organizer does happens in the **console at `admin.html`** — no
+token, no server.
 
-1. **First visit** — paste a fine-grained GitHub PAT scoped to this repo with
-   **Actions: Read and write**, and choose a passphrase. The token is encrypted
-   with the passphrase (PBKDF2 → AES-GCM) and stored **only in your browser** —
-   never committed or sent anywhere except github.com. After that, the "login" is
-   just the passphrase.
-2. **Registration → draw** — as captains open signup issues the engine ingests
-   them automatically. When registration closes, hit **Run the draw**.
-3. **Confirm results** — captains report scores from their Captain view; when both
-   agree, the match appears under **Ready to confirm**. Click **Confirm & advance**
-   (the third confirmation) and the engine records it. Disputes get a manual
+1. **Unlock** — first visit, upload/paste your organizer private key and choose a
+   passphrase. The key is encrypted under the passphrase and stored only in your
+   browser; after that, the "login" is just the passphrase. On your device,
+   `index.html` then routes you straight to the console.
+2. **Collect signups** — captains send you their sealed entry blob through your
+   channel. Paste them into the **Inbox**; each becomes an anonymous team.
+3. **Draw** — once registration closes, hit **Run the draw** (optionally with a
+   seed; publish it and anyone can verify the bracket).
+4. **Confirm results** — captains report scores (also as sealed blobs). Paste
+   them into the Inbox; when both captains of a match agree, it appears under
+   **Ready to confirm**. Click **Confirm & advance**. Disputes get a manual
    override; no-shows get a walkover.
+5. **Publish** — hit **Prepare exports**, download `public.json`, `bracket.json`,
+   `queue.json`, drop them into `config/`, and `git commit && git push`. Pages
+   redeploys on push and the public bracket + captain views update.
 
-Under the hood the dashboard only ever `workflow_dispatch`es the engine — the
-organizer **private key stays a CI secret and never enters the browser**. The
-engine actions (also runnable from *Actions → “game-state engine”*):
+The captain's side (`captain.html`): register → save your key + get your 4-char
+code → later, load your key to see your next fixture and **report your score**,
+which produces a sealed blob you send the organizer.
 
-| Action    | What it does |
-|-----------|--------------|
-| `collect` | Ingest signup + score issues → decrypt → refresh `state/` and the queue. Runs automatically when an issue is opened. |
-| `draw`    | Seeded random single-elimination draw. Writes the full bracket + views. |
-| `result`  | Record one match: `match_id` (e.g. `r8-m1`) + `winner_fp`. |
-| `tally`   | Re-collect score reports and rebuild `config/queue.json`. |
-| `sim`     | Auto-play every remaining match (demo/testing). |
-| `status`  | Print bracket progress and the pending matches. |
-| `purge`   | Manually cascade-delete all stored data. |
+### Optional: run the engine in CI
 
-Every mutation rewrites the `config/*.json` and commits it, which re-triggers the
-Pages deploy. When the final match is decided the engine **auto-purges**:
-`signups/`, `scores/`, and `state/` are deleted and the public files are reduced
-to an anonymized champion record.
-
-### The triple-confirmation flow
-
-```
-Captain A ─ reports score ─┐
-                           ├─ engine tally: scores agree? ─→ queue: "agreed"
-Captain B ─ reports score ─┘                                        │
-                                                    Admin: Confirm & advance
-                                                                    │
-                                          engine result → bracket advances → redeploy
-```
-
-Score reports are **authenticated** with each captain's key: the report embeds
-the captain's public key and only decrypts correctly if produced with their
-private key, so one captain cannot forge the other's agreement (even though the
-public keys live in the repo).
+The same engine is available as a CLI for local use or CI. Commit sealed blobs
+under `signups/` and `scores/`, then either run `tools/advance.mjs` locally or
+trigger *Actions → “game-state engine” → Run workflow* (needs an
+`ORGANIZER_PRIVATE_KEY` repo secret). This path is entirely optional — the
+browser console is the primary flow.
 
 ### Try it locally
 
 ```bash
+npm test                                   # engine + crypto suite
+
 cd tools
-node keygen.mjs --json > organizer.keys.json      # gitignored
-# put the printed publicKey into config/tournament.json, then:
-node make-fake-signups.mjs 32                      # fake encrypted entries
+node keygen.mjs --json > organizer.keys.json   # gitignored; put publicKey in config
+node make-fake-signups.mjs 32                   # fake sealed entries
 node decrypt-signups.mjs
 node advance.mjs draw --seed my-seed
-node make-fake-scores.mjs --dispute r16-m2         # fake authenticated score reports
-node advance.mjs tally                             # build the queue (agreed/disputed)
-node advance.mjs status
-node advance.mjs sim                               # plays to a champion, then purges
+node make-fake-scores.mjs --dispute r16-m2      # fake authenticated score reports
+node advance.mjs tally                          # build the consensus queue
+node advance.mjs sim                            # play to a champion, then purge
 ```
 
 Serve the site with any static server (e.g. `python3 -m http.server`) and open
-`index.html` (tournament) / `captain.html` (sign-up + captain).
+`index.html`.
 
 ---
 
-## Privacy model
+## Privacy & integrity model
 
-- Signups are sealed to the organizer's public key — only the holder of
-  `ORGANIZER_PRIVATE_KEY` can read them.
-- There is no team name to leak: a team is a random four-character code derived
-  from its key. The organizer stores **only** `{ code, captainPublicKey }`.
-- Teams are opaque codes everywhere public.
-- A captain's fixture is sealed to *their* public key; nobody else can decrypt it.
-- Score reports are authenticated to the reporting captain, so results require
-  genuine two-captain agreement (plus admin sign-off) to advance.
-- The admin's GitHub token never leaves the browser (encrypted at rest under the
-  passphrase); the organizer private key never enters the browser at all.
-- On completion, all stored/encrypted data is cascade-deleted; only the
-  anonymized public bracket remains.
-
-The draw is a **seeded** random shuffle: publishing the seed lets anyone verify
-the bracket was not rigged.
+- Signups and score reports are sealed to the organizer's public key — only the
+  holder of the private key can read them.
+- There is no team name to leak: a team is a random 4-char code derived from its
+  key. Public files only ever contain codes.
+- A captain's fixture is sealed to *their* key; nobody else can decrypt it.
+- Score reports are **authenticated** to the reporting captain (the report can
+  only be produced with that captain's private key), so a result needs genuine
+  two-captain agreement plus organizer sign-off to advance.
+- The organizer private key never leaves the organizer's browser (encrypted at
+  rest under the passphrase); no GitHub token is ever used.
+- The draw is a **seeded** shuffle: publish the seed and anyone can verify the
+  bracket was not rigged.
 
 ---
 

@@ -5,11 +5,6 @@
   "teamCount": 32,
   "format": "single-elimination",
   "organizerPublicKey": "eyJrZXlfb3BzIjpbXSwiZXh0Ijp0cnVlLCJrdHkiOiJFQyIsIngiOiI3WDlEQkxqMEhoTDRpOFpINnlfUVlha3RfQlcyZDQyaklHM2lrVXJrRDN3IiwieSI6IlE4c3hycXlxc2haR3dNVHhuOGpQazRqZ3lVX3JHSmktVVZqczBXb21IOW8iLCJjcnYiOiJQLTI1NiJ9",
-  "signup": {
-    "channel": "github-issue",
-    "repo": "joegr/game-state",
-    "issueTitlePrefix": "signup"
-  },
   "phases": [
     {
       "id": "signup",

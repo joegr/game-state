@@ -2,10 +2,11 @@
 // game-state — organizer key generator.
 //
 // Produces the organizer keypair. The PUBLIC key goes into
-// config/tournament.json (so browsers can encrypt signups to you). The PRIVATE
-// key is your secret — keep it out of the repo. Store it as a GitHub Actions
-// secret (ORGANIZER_PRIVATE_KEY) if you process signups in CI, and/or in a local
-// file you never commit.
+// config/tournament.json (so captains can encrypt signups + scores to you). The
+// PRIVATE key is your only privileged credential: load it into the admin console
+// (admin.html), where it is encrypted under your passphrase in your browser.
+// Keep it out of the repo. (Only needed as an ORGANIZER_PRIVATE_KEY secret if you
+// also use the optional CLI/CI path.)
 //
 // Usage:
 //   node keygen.mjs            human-readable banner
@@ -21,7 +22,7 @@ if (process.argv.includes('--json')) {
   console.log('\n=== game-state organizer keypair ===\n');
   console.log('PUBLIC KEY  (paste into config/tournament.json -> organizerPublicKey):\n');
   console.log(publicKey + '\n');
-  console.log('PRIVATE KEY (SECRET — never commit; store as ORGANIZER_PRIVATE_KEY):\n');
+  console.log('PRIVATE KEY (SECRET — never commit; load into admin.html to unlock the console):\n');
   console.log(privateKey + '\n');
-  console.log('Tip:  node keygen.mjs --json > organizer.keys.json   (add to .gitignore)\n');
+  console.log('Tip:  node keygen.mjs --json > organizer.keys.json   (gitignored; upload this file in admin.html)\n');
 }
