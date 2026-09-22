@@ -17,12 +17,6 @@ export function el(tag, attrs = {}, ...children) {
 
 export function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
 
-export function fmtDate(iso) {
-  return new Date(iso).toLocaleString(undefined, {
-    dateStyle: 'medium', timeStyle: 'short',
-  });
-}
-
 // localStorage-backed captain key store (per tournament name).
 export const keyStore = {
   k: (name) => `game-state:captain:${name}`,

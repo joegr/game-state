@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, readdirSync
 import { seal, unseal, boxSenderPub, publicRaw } from '../js/crypto.js';
 import {
   buildDraw, applyResult, simAll, computeQueue, buildPublic, buildViews,
-  currentPhaseLabel, roundStartsFor, roundsForTeams,
+  currentPhaseLabel,
 } from '../js/engine.js';
 import { p, organizerPrivateKey } from './lib.mjs';
 
@@ -51,8 +51,7 @@ async function draw() {
   if (teams.length < 2) { console.error('Need at least 2 teams to draw.'); process.exit(1); }
 
   const seed = flag('--seed', `${tournament.name}:${teams.length}:${Date.now()}`);
-  const starts = roundStartsFor(tournament.phases, roundsForTeams(teams.length));
-  const state = buildDraw(teams.map((t) => t.fp), seed, starts);
+  const state = buildDraw(teams.map((t) => t.fp), seed);
 
   mkdirSync(p('state'), { recursive: true });
   writeJson(['state', 'matches.json'], state);

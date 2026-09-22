@@ -61,10 +61,10 @@ Feature: Tournament setup
       Then the console refuses with "That private key does not match this tournament's organizer public key."
       And nothing is stored on the device
 
-  Rule: The schedule is declared once, in UTC, as the tournament's spine
+  Rule: The stage list is declared once, as the tournament's spine
 
     @schedule
-    Scenario: A complete phase schedule
+    Scenario: A complete phase list
       Given the config declares the phases
         | id            | kind     | label            |
         | signup        | signup   | Registration     |
@@ -73,17 +73,18 @@ Feature: Tournament setup
         | semifinals    | knockout | Semi-finals      |
         | final         | knockout | The Final        |
         | complete      | complete | Champion Crowned |
-      And every phase carries an ISO-8601 UTC "start"
-      Then the schedule is valid
-      And every visitor derives the same stage from it
+      And an "activePhase" names exactly one of those ids
+      Then the phase list is valid
+      And every visitor derives the same current stage from it
 
     @schedule @guard
-    Scenario: Placeholder dates must be replaced before launch
-      Given the shipped config carries placeholder phase dates
-      When the organizer deploys without changing them
-      Then the public bracket may show a stage that does not match reality
-      # Guard rail: setup instructions state the dates are placeholders.
-      # The clock is the source of truth, so a stale schedule is a live bug.
+    Scenario: activePhase must name a real phase
+      Given "activePhase" names an id absent from "phases"
+      When the organizer deploys without fixing it
+      Then the site falls back to the first declared phase
+      And no visitor sees a broken or blank stage
+      # Guard rail, not a silent trap: `activePhase` is a plain string the
+      # organizer edits by hand, so a typo is possible and must fail safe.
 
     @schedule @pending
     Scenario: The config declares no phase the engine cannot run
@@ -91,13 +92,13 @@ Feature: Tournament setup
       When the config declares a phase of kind "group"
       Then setup validation fails with "no engine implements phase kind: group"
       # NOT YET IMPLEMENTED — today a group phase is silently absorbed as a
-      # knockout round and inherits that round's start date.
+      # knockout round.
 
   @smoke
   Scenario: A minimal tournament is ready to open
     Given the organizer has set "organizerPublicKey" to a real public key
     And has set "name", "teamCount" and "format"
-    And has set future UTC starts on every phase
+    And has set "activePhase" to "signup"
     And has enabled static hosting from the default branch
-    When the clock passes the "signup" phase start
+    When that config is committed and pushed
     Then registration opens with no further action from anyone

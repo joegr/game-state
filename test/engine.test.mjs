@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildDraw, applyResult, simAll, computeQueue, buildPublic, buildViews,
-  roundsForTeams, roundStartsFor, playableMatches, currentPhaseLabel,
+  playableMatches, currentPhaseLabel,
 } from '../js/engine.js';
 
 const teams = (n) => Array.from({ length: n }, (_, i) => `T${String(i).padStart(2, '0')}`);
@@ -149,15 +149,3 @@ test('buildViews: champion / eliminated / scheduled perspectives', () => {
   assert.ok(losers.some((t) => views[t].status === 'eliminated'));
 });
 
-test('roundsForTeams / roundStartsFor', () => {
-  assert.equal(roundsForTeams(32), 5);
-  assert.equal(roundsForTeams(8), 3);
-  assert.equal(roundsForTeams(5), 3); // → 8-bracket
-  const phases = [
-    { kind: 'signup', start: 's' }, { kind: 'group', start: 'g' },
-    { kind: 'knockout', start: 'k1' }, { kind: 'knockout', start: 'k2' },
-    { kind: 'knockout', start: 'k3' }, { kind: 'complete', start: 'c' },
-  ];
-  // 3 rounds → last 3 non-signup/non-complete phases.
-  assert.deepEqual(roundStartsFor(phases, 3), ['g', 'k1', 'k2', 'k3'].slice(1));
-});

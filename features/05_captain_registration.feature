@@ -110,9 +110,13 @@ Feature: Captain registration
       Then the organizer is warned about the collision
       And one captain is asked to re-register for a fresh code
 
-  @pending @gating
-  Scenario: Registration closes on the clock
-    Given the signup phase has ended
+  @gating
+  Scenario: Registration is an organizer decision, not a phase gate
+    Given "activePhase" has moved past "signup"
     When a visitor opens the landing page
-    Then no registration control is offered
-    # NOT YET IMPLEMENTED — see 04_clock_driven_phases.feature.
+    Then a registration control is still offered, because it is keyed only on
+      "organizerPublicKey" being set
+    # By design — see 04_deploy_driven_phases.feature. The organizer decides
+    # which entries actually count when reviewing the Inbox; a late sealed
+    # entry is harmless because nothing accepts it into the bracket
+    # automatically.

@@ -37,9 +37,8 @@ export function roundLabel(slots) {
   return { 2: 'The Final', 4: 'Semi-finals', 8: 'Quarter-finals' }[slots] || `Round of ${slots}`;
 }
 
-// Build a seeded single-elimination bracket. `roundStarts[i]` is the ISO start
-// for round i (or null); the caller derives these from the tournament schedule.
-export function buildDraw(teamFps, seed, roundStarts = []) {
+// Build a seeded single-elimination bracket.
+export function buildDraw(teamFps, seed) {
   const rng = seededRng(seed);
   const order = shuffle(teamFps, rng);
   let size = 1; while (size < order.length) size *= 2;
@@ -65,7 +64,7 @@ export function buildDraw(teamFps, seed, roundStarts = []) {
       if (m.a && !m.b) m.winner = m.a;
       if (m.b && !m.a) m.winner = m.b;
     }
-    rounds.push({ slots: roundSlots, label: roundLabel(roundSlots), start: roundStarts[r] || null, matches });
+    rounds.push({ slots: roundSlots, label: roundLabel(roundSlots), matches });
     const next = [];
     for (let i = 0; i < matches.length; i += 2) next.push({ a: null, b: null });
     current = next; roundSlots /= 2;
@@ -196,7 +195,7 @@ export function buildPublic(state, tournamentName, teamCount) {
     teamCount, champion: state.champion || null,
     matchesDecided: decided, matchesTotal: total,
     rounds: state.rounds.map((r) => ({
-      label: r.label, slots: r.slots, start: r.start || null,
+      label: r.label, slots: r.slots,
       matches: r.matches.map((m) => ({ id: m.id, a: m.a, b: m.b, winner: m.winner })),
     })),
   };
@@ -213,7 +212,7 @@ export function buildViews(state, teamFps) {
         const fp = m[side]; if (!fp) continue;
         if (m.winner && m.winner !== fp) eliminated.add(fp);
         if (!m.winner && !nextFixture.has(fp)) {
-          nextFixture.set(fp, { phaseLabel: state.rounds[r].label, opponent: side === 'a' ? m.b : m.a, matchTime: state.rounds[r].start, matchId: m.id });
+          nextFixture.set(fp, { phaseLabel: state.rounds[r].label, opponent: side === 'a' ? m.b : m.a, matchId: m.id });
         }
       }
     }
@@ -226,24 +225,10 @@ export function buildViews(state, teamFps) {
       const f = nextFixture.get(fp);
       views[fp] = {
         status: f.opponent ? 'scheduled' : 'bye', phaseLabel: f.phaseLabel, opponent: f.opponent || null,
-        matchTime: f.matchTime, matchId: f.matchId,
+        matchId: f.matchId,
         instructions: f.opponent ? 'Play your match, then report the score. It advances once both captains agree and the organizer confirms.' : 'Opponent to be decided — sit tight.',
       };
     } else views[fp] = { status: 'scheduled', phaseLabel: 'Awaiting draw' };
   }
   return views;
-}
-
-// Align bracket rounds to the tournament schedule from the end (last round ->
-// final phase). `phases` is tournament.json's phases array.
-export function roundStartsFor(phases, nRounds) {
-  const knockout = phases.filter((ph) => ph.kind !== 'signup' && ph.kind !== 'complete');
-  const tail = knockout.slice(Math.max(0, knockout.length - nRounds)).map((ph) => ph.start);
-  while (tail.length < nRounds) tail.unshift(tail[0] || null);
-  return tail;
-}
-
-export function roundsForTeams(teamCount) {
-  let size = 1; while (size < teamCount) size *= 2;
-  return Math.max(1, Math.log2(size));
 }

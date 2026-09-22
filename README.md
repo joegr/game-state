@@ -4,14 +4,17 @@
 that lives entirely as static files and JSON on GitHub Pages.
 
 No database, no backend, no accounts, no tokens. The tournament *is* a state
-machine: its stage is driven by the clock, and its bracket is a handful of JSON
-files. The **organizer** is the only privileged role, and the only thing that
-makes them the organizer is possession of one private key.
+machine: its stage is a handful of static JSON files, and it only ever changes
+because the organizer edited one and pushed. The **organizer** is the only
+privileged role, and the only thing that makes them the organizer is
+possession of one private key.
 
-- **Time-based stage** — registration → group stage → knockouts → final is a
-  *pure function of the clock* versus the phase boundaries in
-  [`config/tournament.json`](config/tournament.json). Every visitor computes the
-  same stage from the same static config.
+- **Deploy-driven stage** — registration → group stage → knockouts → final is
+  an explicit `activePhase` field in
+  [`config/tournament.json`](config/tournament.json). Nothing advances on a
+  timer: the organizer edits `activePhase` and pushes, and *that push* is the
+  only thing that moves the tournament forward. Every visitor reads the same
+  static config, so there is nothing to poll and no clock skew to worry about.
 - **Anonymous, encrypted, key-only** — captains register from the page; each
   entry is sealed to the organizer's public key with WebCrypto (ECDH P-256 →
   HKDF → AES-GCM). There are no names: a team is a random **four-character code**
@@ -32,7 +35,7 @@ makes them the organizer is possession of one private key.
   confirms. Disagreements are flagged for manual resolution.
 
 > An Elo-tracking module is planned to sit alongside this; for now the focus is
-> the time-based state machine and its static, key-only operation.
+> the deploy-driven state machine and its static, key-only operation.
 
 ---
 
@@ -42,7 +45,7 @@ makes them the organizer is possession of one private key.
 Browser (static, GitHub Pages)
 ├─ index.html    dispatcher → organizer's device goes to admin; everyone else gets
 │                a one-line, one-button anonymous sign-up          (js/home.js)
-├─ bracket.html  public anonymized bracket + live stage + roadmap  (js/tournament.js)
+├─ bracket.html  public anonymized bracket + current stage + roadmap  (js/tournament.js)
 ├─ captain.html  sign up (seal a blob) · captain view · report score (js/app.js …)
 └─ admin.html    organizer console — the whole engine, client-side  (js/admin.js)
 
@@ -52,7 +55,7 @@ js/
 └─ …           the SAME engine.js / crypto.js run in the browser AND in Node
 
 config/                        the tournament, as JSON
-├─ tournament.json   schedule + phase boundaries + organizer PUBLIC key   (you set)
+├─ tournament.json   phases + activePhase + organizer PUBLIC key   (you set, you advance)
 ├─ public.json       anonymized bracket, updated per match                (exported)
 ├─ bracket.json      per-captain ENCRYPTED views                          (exported)
 └─ queue.json        two-captain score-consensus queue                    (exported)
@@ -87,12 +90,13 @@ No build step — vanilla ES modules, served as-is.
    never committed. (`node keygen.mjs --json > organizer.keys.json` is gitignored
    and can be uploaded directly in `admin.html`.)
 3. **Configure the tournament** in `config/tournament.json`: `name`, `teamCount`,
-   and the `phases` with their UTC `start` times. The shipped dates are
-   placeholders — set real ones, since the stage is a pure function of the clock.
+   and `activePhase` (which stage — `signup`, `groups`, `r16`, … — is live right
+   now; it starts at `signup`). `phases` lists the stages in order for the
+   roadmap; none of them carry dates, because nothing here runs on a timer.
    Until you complete steps 2 and 3, the site deliberately shows "Registration is
    not open yet" rather than accepting entries nobody could decrypt.
 4. **Enable Pages:** *Settings → Pages → Source = GitHub Actions*, then push.
-   Registration opens automatically when the clock passes the `signup` phase.
+   Registration opens as soon as that push deploys — not before, not on a clock.
 
 ---
 
@@ -107,16 +111,22 @@ token, no server.
    `index.html` then routes you straight to the console.
 2. **Collect signups** — captains send you their sealed entry blob through your
    channel. Paste them into the **Inbox**; each becomes an anonymous team.
-3. **Draw** — once registration closes, hit **Run the draw** (optionally with a
-   seed; publish it and anyone can verify the bracket).
-4. **Confirm results** — captains report scores (also as sealed blobs). Paste
+3. **Close registration** — when you're ready to stop taking entries, edit
+   `config/tournament.json → activePhase` to the next stage (e.g. `groups`) and
+   push. That push is the only thing that closes signup; there is no deadline
+   enforced anywhere else.
+4. **Draw** — hit **Run the draw** (optionally with a seed; publish it and
+   anyone can verify the bracket). From here the bracket's own state (who's
+   won, who's left) drives the organizer console — `activePhase` only matters
+   pre-draw.
+5. **Confirm results** — captains report scores (also as sealed blobs). Paste
    them into the Inbox; when both captains of a match agree, it appears under
    **Ready to confirm**. Click **Confirm & advance**. Disputes get a manual
    override; no-shows get a walkover.
-5. **Publish** — hit **Prepare exports**, download `public.json`, `bracket.json`,
+6. **Publish** — hit **Prepare exports**, download `public.json`, `bracket.json`,
    `queue.json`, drop them into `config/`, and `git commit && git push`. Pages
    redeploys on push and the public bracket + captain views update.
-6. **Back up** — hit **Download backup** before you close the tab. The console's
+7. **Back up** — hit **Download backup** before you close the tab. The console's
    working state (roster, score reports, bracket) lives *only* in this browser's
    localStorage, and the captains' public keys exist nowhere else — without a
    backup, clearing site data or switching devices makes every later round

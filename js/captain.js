@@ -5,7 +5,7 @@
 // their own — with the private key they hold. No captain can enumerate the field,
 // see other identities, or read the full draw. That is the whole privacy model.
 
-import { el, clear, keyStore, fmtDate, copy } from './util.js';
+import { el, clear, keyStore, copy } from './util.js';
 import { unseal, authSeal } from './crypto.js';
 
 export async function renderCaptain(root, tournament, bracket) {
@@ -66,7 +66,6 @@ function renderView(view, key, tournament) {
     view.opponent ? el('div', { class: 'match' },
       el('div', {}, 'Next opponent'),
       el('div', { class: 'opp' }, el('code', { class: 'mono' }, view.opponent)),
-      view.matchTime ? el('div', { class: 'muted' }, fmtDate(view.matchTime)) : null,
     ) : null,
     view.instructions ? el('p', { class: 'muted' }, view.instructions) : null,
     view.status === 'champion' ? el('p', { class: 'gold big' }, 'You won the Gauntlet.') : null,

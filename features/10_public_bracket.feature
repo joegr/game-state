@@ -4,9 +4,9 @@ Feature: Public bracket
   I want an anonymized view of the whole tournament and its progress
   So that anyone can follow the competition without any access to it
 
-  The public bracket is the spectator's primary screen: the live stage, a
-  countdown, and the tree of four-character codes filling in as matches close.
-  It is a static file; there is nothing to log in to and nothing to query.
+  The public bracket is the spectator's primary screen: the current stage and
+  the tree of four-character codes filling in as matches close. It is a
+  static file; there is nothing to log in to and nothing to query.
 
   Background:
     Given a published tournament
@@ -18,8 +18,8 @@ Feature: Public bracket
       Given the draw has not happened
       When a spectator opens the public bracket
       Then the phase roadmap is shown
-      And each phase shows its label, its start time and its blurb
-      And each phase is marked past, active or upcoming
+      And each phase shows its label and its blurb, with no date attached
+      And each phase is marked past, active or upcoming relative to activePhase
       And no empty bracket is drawn
 
   Rule: After the draw, the public view is the bracket
@@ -75,14 +75,13 @@ Feature: Public bracket
       When a spectator opens the public bracket
       Then the stage reads "Champion crowned"
       And the champion "G1BI" is shown prominently
-      And no countdown is displayed
 
   Rule: The public view degrades gracefully
 
     @resilience
     Scenario: A missing published bracket does not break the page
       Given "public.json" cannot be loaded
-      Then the page still renders the clock-driven stage and roadmap
+      Then the page still renders the current stage and roadmap from tournament.json
       And no error is shown to the spectator
 
     @responsive

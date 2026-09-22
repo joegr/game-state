@@ -106,10 +106,11 @@ Feature: Locked settings
       And the seed is unchanged
 
   @schedule
-  Scenario: The schedule stays editable but is visibly append-only in effect
+  Scenario: activePhase stays editable but never rewrites the bracket
     Given the tournament is in the "Round of 16" phase
-    When the organizer moves a FUTURE phase start later
+    When the organizer pushes "activePhase" back to an earlier stage
     Then the change takes effect for every visitor at once
-    But moving a PAST phase start changes no completed result
-    # The clock drives presentation, never the bracket: results are facts,
-    # phases are just when those facts were expected to happen.
+    But it changes no completed result in the bracket
+    # activePhase drives presentation, never the bracket: results are facts
+    # produced by applyResult/computeQueue; activePhase is just a label for
+    # where things stand.

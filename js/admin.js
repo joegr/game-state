@@ -18,7 +18,7 @@ import {
 } from './crypto.js';
 import {
   buildDraw, applyResult, computeQueue, buildPublic, buildViews,
-  currentPhaseLabel, roundStartsFor, roundsForTeams, playableMatches,
+  currentPhaseLabel, playableMatches,
 } from './engine.js';
 
 const VAULT = 'game-state:admin:vault';
@@ -198,7 +198,7 @@ function renderRegistration() {
       el('button', { class: 'btn', disabled: work.teams.length < 2 || null, onclick: () => {
         if (!confirm(`Run the draw for ${work.teams.length} teams? This locks the field.`)) return;
         const s = seed.value.trim() || `${tournament.name}:${Date.now()}`;
-        work.matches = buildDraw(work.teams.map((t) => t.fp), s, roundStartsFor(tournament.phases, roundsForTeams(work.teams.length)));
+        work.matches = buildDraw(work.teams.map((t) => t.fp), s);
         work.seed = work.matches.seed; saveWork(); toast('Bracket drawn.'); render();
       } }, 'Run the draw')),
   ));

@@ -1,16 +1,16 @@
 // game-state — the PUBLIC tournament view (the front door / landing page).
 //
-// This is what a visitor to user.github.io/game-state/ sees first: the live
-// stage (clock-driven), a countdown, the roadmap before the draw, and the
-// anonymized bracket once matches begin. Everything here is public and
-// anonymous — the private "captain perspective" lives on captain.html.
+// This is what a visitor to user.github.io/game-state/ sees first: the current
+// stage, a roadmap before the draw, and the anonymized bracket once matches
+// begin. Everything here is public and anonymous — the private "captain
+// perspective" lives on captain.html.
 
 import { loadTournament } from './config.js';
-import { resolvePhases, currentPhase, isSignupOpen, msToNextTransition, formatDuration } from './stateMachine.js';
-import { el, clear, fmtDate } from './util.js';
+import { currentPhase, isSignupOpen } from './stateMachine.js';
+import { el, clear } from './util.js';
 
 const app = document.getElementById('app');
-let tournament, pub, countdownTimer;
+let tournament, pub;
 
 async function loadPublic() {
   try {
@@ -38,47 +38,32 @@ function teamChip(fp, { winner, dim } = {}) {
 }
 
 function render() {
-  clearInterval(countdownTimer);
   clear(app);
-  const now = new Date();
-  const cur = currentPhase(tournament, now);
+  const cur = currentPhase(tournament);
   const drawn = pub.rounds && pub.rounds.length > 0;
   const complete = pub.status === 'complete';
-  // Before the first phase starts, currentPhase() falls back to phases[0] with
-  // status 'upcoming' — distinguish that from a phase that has actually begun.
-  const notStarted = !complete && cur?.status === 'upcoming';
-
-  // Hero — live stage + countdown, from the clock.
-  const countdown = el('span', { class: 'mono big' }, '—');
-  const tick = () => {
-    const ms = msToNextTransition(tournament, new Date());
-    countdown.textContent = ms == null ? 'complete' : formatDuration(ms);
-  };
-  tick();
-  countdownTimer = setInterval(tick, 1000);
 
   app.append(el('div', { class: 'card hero' },
     el('div', { class: 'row spread' },
       el('div', {},
-        el('div', { class: 'muted' }, notStarted ? 'Next stage' : 'Current stage'),
+        el('div', { class: 'muted' }, 'Current stage'),
         el('h2', { class: 'phase-title' }, complete ? 'Champion crowned' : (cur ? cur.label : '—')),
       ),
-      el('span', { class: 'badge ' + (complete ? 'gold' : notStarted ? 'upcoming' : 'good') },
-        complete ? 'COMPLETE' : notStarted ? 'UPCOMING' : 'LIVE'),
+      el('span', { class: 'badge ' + (complete ? 'gold' : 'good') }, complete ? 'COMPLETE' : 'LIVE'),
     ),
     cur?.blurb && !complete ? el('p', { class: 'muted' }, cur.blurb) : null,
     complete && pub.champion
       ? el('p', { class: 'gold big' }, '🏆 Champion: ', el('span', { class: 'mono' }, pub.champion))
-      : (cur && isFinite(cur.endMs) ? el('p', {}, (notStarted ? 'Starts in ' : 'Next stage in '), countdown) : null),
+      : null,
     drawn && !complete
       ? el('p', { class: 'muted sm' }, `${pub.teamCount || 0} teams · ${pub.matchesDecided}/${pub.matchesTotal} matches decided`)
       : null,
-    isSignupOpen(tournament, now)
+    isSignupOpen(tournament)
       ? el('a', { class: 'btn', href: 'index.html' }, 'Register your team →')
       : null,
   ));
 
-  if (drawn) renderBracket(); else renderRoadmap(now);
+  if (drawn) renderBracket(); else renderRoadmap();
 
   app.append(el('p', { class: 'muted sm center' },
     'Anonymized public bracket · registered captains track their own fixtures in the ',
@@ -92,7 +77,7 @@ function renderBracket() {
     pub.matchesTotal ? el('div', { class: 'progress' }, el('div', { class: 'bar', style: `width:${pct}%` })) : null,
     el('div', { class: 'bracket' }, pub.rounds.map((round) =>
       el('div', { class: 'col' },
-        el('div', { class: 'col-head' }, el('strong', {}, round.label), round.start ? el('div', { class: 'muted sm' }, fmtDate(round.start)) : null),
+        el('div', { class: 'col-head' }, el('strong', {}, round.label)),
         round.matches.map((m) => {
           const decided = !!m.winner;
           return el('div', { class: 'bmatch' + (decided ? ' done' : '') },
@@ -104,22 +89,27 @@ function renderBracket() {
       ))));
 }
 
-function renderRoadmap(now) {
-  const phases = resolvePhases(tournament, now);
+// Before the draw: an ordered list of stages relative to the current one — no
+// dates, since nothing here is clock-driven. Advancing past a stage means the
+// organizer edits `activePhase` and pushes; this list just reflects that.
+function renderRoadmap() {
+  const cur = currentPhase(tournament);
+  const curIdx = tournament.phases.findIndex((p) => p.id === cur?.id);
   app.append(el('div', { class: 'card' },
     el('h3', {}, 'Roadmap'),
-    el('ol', { class: 'timeline' }, phases.map((p) =>
-      el('li', { class: `tl ${p.status}` },
+    el('ol', { class: 'timeline' }, tournament.phases.map((p, i) => {
+      const status = i < curIdx ? 'past' : i === curIdx ? 'active' : 'upcoming';
+      return el('li', { class: `tl ${status}` },
         el('span', { class: 'dot' }),
         el('div', {},
           el('div', { class: 'row spread' },
             el('strong', {}, p.label),
-            el('span', { class: 'badge ' + p.status }, p.status),
+            el('span', { class: 'badge ' + status }, status),
           ),
-          el('div', { class: 'muted sm' }, fmtDate(p.start)),
           p.blurb ? el('div', { class: 'muted sm' }, p.blurb) : null,
         ),
-      ))),
+      );
+    })),
   ));
 }
 
