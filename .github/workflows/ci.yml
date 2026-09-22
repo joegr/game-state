@@ -1,10 +1,10 @@
 name: game-state CI
 
-# Runs the pure-engine test suite on every push/PR, plus a sanity check of the
-# actual database of record: config/tournament.md (this repo) and
-# roster.md/results.md (the live roster repo, fetched fresh — not a fixture).
-# A markdown file with a typo that silently breaks the site is exactly the
-# kind of thing this should catch before it ships.
+# On every push and PR: the test suite, and a check of the live public record
+# using the SAME reconstruction and invariants the workflows gate on
+# (js/engine.js → reconstruct). A hand-edited roster.md or results.md that
+# no longer replays cleanly fails here, and it freezes every intake,
+# acceptance and stage change until it's fixed.
 
 on:
   push:
@@ -24,72 +24,22 @@ jobs:
         with:
           node-version: '20'
       - run: npm test
+      - name: Workflow files parse (including the private repo's templates)
+        run: |
+          python3 - <<'PY'
+          import glob, yaml
+          for f in sorted(glob.glob('.github/workflows/*.yml') + glob.glob('tentative/.github/workflows/*.yml')):
+              yaml.safe_load(open(f)); print('ok', f)
+          PY
 
-  validate-markdown:
+  validate-record:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Parse tournament.md, roster.md, results.md and check invariants
-        run: |
-          node --input-type=module -e '
-            import { readFileSync } from "node:fs";
-            import {
-              parseConfigMd, parseRosterMd, parseResultsMd, signupProgress,
-              buildDraw, applyResult,
-            } from "./js/engine.js";
-
-            const t = parseConfigMd(readFileSync("config/tournament.md", "utf8"));
-            const fail = (msg) => { console.error("::error::" + msg); process.exitCode = 1; };
-
-            if (!t.name) fail("tournament.md: missing name");
-            if (!Array.isArray(t.phases) || !t.phases.length) fail("tournament.md: no phases");
-            if (t.phases && !t.phases.some((p) => p.id === t.activePhase)) {
-              fail(`tournament.md: activePhase "${t.activePhase}" is not one of the declared phases`);
-            }
-            if (!t.rosterRepo) fail("tournament.md: rosterRepo is not set");
-
-            const rosterRes = await fetch(`https://raw.githubusercontent.com/${t.rosterRepo}/main/roster.md`);
-            const roster = parseRosterMd(rosterRes.ok ? await rosterRes.text() : "");
-            const fps = roster.map((r) => r.fp);
-            if (new Set(fps).size !== fps.length) fail("roster.md: duplicate team codes");
-
-            const prog = signupProgress(fps, t.teamCount, t.groupSize);
-            if (prog.registered > prog.capacity) fail(`roster.md: ${prog.registered} registered exceeds capacity ${prog.capacity}`);
-
-            const resultsRes = await fetch(`https://raw.githubusercontent.com/${t.rosterRepo}/main/results.md`);
-            const results = parseResultsMd(resultsRes.ok ? await resultsRes.text() : "");
-            const seen = new Set();
-            for (const r of results) {
-              if (seen.has(r.matchId)) fail(`results.md: duplicate entry for ${r.matchId}`);
-              seen.add(r.matchId);
-              if (roster.length > 0 && !fps.includes(r.winner)) fail(`results.md: winner "${r.winner}" for ${r.matchId} is not on the roster`);
-            }
-
-            // Drift check. The bracket is never stored — it is rebuilt from
-            // (sorted roster + drawSeed) every time anyone reads it. So if the
-            // roster or the seed changed after the draw, the matchIds already
-            // in results.md stop describing any real match. The CLI guards
-            // against that, but roster.md and tournament.md are hand-editable
-            // through the GitHub web UI, which bypasses the CLI entirely.
-            if (t.drawSeed && roster.length >= 2) {
-              const state = buildDraw(fps, t.drawSeed);
-              for (const r of results) {
-                const match = state.rounds.flatMap((rd) => rd.matches).find((m) => m.id === r.matchId);
-                if (!match) {
-                  fail(`results.md: ${r.matchId} does not exist in the bracket rebuilt from roster.md + seed "${t.drawSeed}" — the roster or the seed changed after the draw`);
-                  continue;
-                }
-                if (match.a !== r.winner && match.b !== r.winner) {
-                  fail(`results.md: ${r.winner} did not play in ${r.matchId} (that match is ${match.a} vs ${match.b}) — the bracket has drifted from the record`);
-                  continue;
-                }
-                applyResult(state, r.matchId, r.winner);
-              }
-              console.log(`Bracket rebuilds cleanly: ${state.rounds.length} round(s), seed "${t.drawSeed}".`);
-            }
-
-            console.log(`OK: ${t.name} — ${fps.length} team(s), ${results.length} confirmed result(s).`);
-          '
+      - name: The published record replays cleanly
+        env:
+          GH_TOKEN: ${{ github.token }}   # reads the public repos; the private queue is skipped (--public)
+        run: node tools/advance.mjs check --public

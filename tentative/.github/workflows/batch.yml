@@ -1,0 +1,59 @@
+# game-state — BATCH. Lives in the PRIVATE tentative repo. Folds every waiting
+# inbox/ entry into signups.md, scores.md, attempts.md (and rejected.md) in ONE
+# commit, re-checking every stage gate at batch time (tools/batch.mjs).
+#
+# Exactly one batch runs at a time. If more are requested while one runs,
+# GitHub keeps a single pending run and drops the rest. That's safe here: a
+# batch processes everything waiting when it starts, so the pending one picks
+# up whatever arrived meanwhile.
+name: batch
+
+on:
+  workflow_dispatch:        # intake.yml asks after every submission; so can the organizer
+  schedule:
+    - cron: '17 * * * *'    # hourly backstop, in case a dispatch was missed
+
+permissions:
+  contents: write
+
+concurrency:
+  group: batch
+  cancel-in-progress: false
+
+jobs:
+  batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: __APP_REPO__
+          path: .app
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Fold the inbox into the queue
+        id: fold
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_REPO: __APP_REPO__
+          TENTATIVE_REPO: ${{ github.repository }}
+          TENTATIVE_DIR: .
+        run: node .app/tools/batch.mjs
+      - name: Commit
+        run: |
+          git config user.name "game-state batch"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add signups.md scores.md attempts.md
+          [ -f rejected.md ] && git add rejected.md
+          git add -A inbox 2>/dev/null || true
+          if git diff --cached --quiet; then echo "nothing changed"; exit 0; fi
+          git commit -q -m "batch: ${{ steps.fold.outputs.message }}"
+          # Intake may have added inbox files meanwhile. Those are new paths, so
+          # a rebase is always clean.
+          for i in 1 2 3 4 5; do
+            git push -q && exit 0
+            git pull -q --rebase
+          done
+          exit 1

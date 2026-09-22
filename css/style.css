@@ -101,6 +101,22 @@ code.mono { background: var(--bg); padding: 2px 6px; border-radius: 6px; border:
 .good-text { color: var(--good); }
 hr { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
 
+/* captain credentials + score entry */
+.creds { display: flex; gap: 28px; flex-wrap: wrap; margin: 12px 0; }
+.creds > div { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.creds-input { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.versus { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; text-align: center; }
+.versus .input.score { font-size: 22px; text-align: center; margin: 6px 0 0; }
+.queued { margin: 10px 0 0; font-size: 14px; }
+.badge.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.chip { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; }
+.chip.unpublished { border-style: dashed; opacity: .8; }
+.claims { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+.claim { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.step { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.step:last-of-type { border-bottom: none; }
+h4 { margin: 12px 0 6px; font-size: 14px; }
+
 /* organizer control bar */
 .organizer-trigger {
   position: fixed; right: 14px; bottom: 14px; z-index: 40;

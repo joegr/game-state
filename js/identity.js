@@ -1,12 +1,11 @@
 // game-state — team identity.
 //
-// A captain's identity is a single random TOKEN, generated on their device.
-// Their team code is a hash of that token. Proving "I am this team" later — to
-// report a score — means presenting the token again; anyone holding the roster
-// checks it by re-hashing and comparing against the published hash.
-//
-// Everything published is meant to be readable; what it has to be is
-// unforgeable.
+// A team is born from a random TOKEN generated on the captain's device: the
+// public four-character team code is a hash of it, and the public roster
+// carries the token's hash. From then on, the captain proves who they are with
+// the team code (public — identifies) plus a 4-digit PIN (secret — proves),
+// checked by the intake workflow against a hash that lives only in the private
+// tentative repo. The token itself never needs to leave the device again.
 
 const subtle = globalThis.crypto.subtle;
 
@@ -58,65 +57,30 @@ export async function generateCode(input) {
 // Backwards-compatible name used by published bracket and roster code.
 export const fingerprint = generateCode;
 
-// ---- blobs for paste-and-copy transport ------------------------------------
+// ---- the captain's PIN ------------------------------------------------------
 //
-// Signups and score reports move around as one copyable string: paste into a
-// chat, paste into the organizer's Inbox. A stable, URL-safe encoding is all
-// that takes.
+// The team code is PUBLIC — it is printed on the bracket — so it can only ever
+// identify a team, never prove one. The proof is a 4-digit PIN, issued at
+// registration and known only to the captain. Its hash lives in the PRIVATE
+// tentative repo (signups.md), never in anything public: 10,000 possible PINs
+// is trivially brute-forced offline from a published hash, so the defence is
+// that nobody outside the private repo ever sees one, plus a lockout after
+// MAX_PIN_ATTEMPTS wrong guesses at intake.
 
-export function encodeBlob(obj) {
-  return bytesToB64url(new TextEncoder().encode(JSON.stringify(obj)));
+export function randomPin() {
+  // Rejection sampling: 2^32 is not a multiple of 10,000, so a plain modulo
+  // would make low PINs very slightly likelier.
+  const limit = Math.floor(0x100000000 / 10000) * 10000;
+  const buf = new Uint32Array(1);
+  do globalThis.crypto.getRandomValues(buf); while (buf[0] >= limit);
+  return String(buf[0] % 10000).padStart(4, '0');
 }
 
-export function decodeBlob(str) {
-  return JSON.parse(new TextDecoder().decode(b64urlToBytes(str)));
+// Salted with the team code so identical PINs on two teams hash differently.
+export async function pinHash(fp, pin) {
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(`game-state-pin:${fp}:${pin}`));
+  return bytesToB64url(new Uint8Array(digest));
 }
 
-// A signup entry, as the captain sends it to the organizer. It MUST be one
-// long base64url run, because that is exactly what `advance.mjs ingest` scans
-// for (/[A-Za-z0-9_-]{60,}/) before handing it to classifyPayload — a bare
-// token is too short to be found and would be silently skipped.
-export function signupEntry(token) {
-  return encodeBlob({ v: 1, token });
-}
-
-// ---- the captain's score-report key -----------------------------------------
-//
-// There is only ever ONE secret per team: the token. The "key" is that same
-// token with the team code attached, so the captain can see at a glance which
-// team it belongs to and paste a single string into the reporting page. The
-// code adds no information — it is derived from the token — which is why
-// parseKey re-derives it rather than trusting what was pasted.
-
-export async function formatKey(token) {
-  return `${await generateCode(token)}:${token}`;
-}
-
-// Deliberately liberal about what it accepts: a key, a bare token, a signup
-// blob, or the old JSON download. Returns {fp, token}, or null.
-export async function parseKey(text) {
-  const t = (text || '').trim();
-  if (!t) return null;
-  let token = null;
-
-  const pair = t.match(/^([A-Za-z0-9]{4})\s*[:\-]\s*([A-Za-z0-9_-]{20,})$/);
-  if (pair) {
-    token = pair[2];
-  } else if (/^[A-Za-z0-9_-]{20,}$/.test(t)) {
-    // Could be a bare token or an encoded blob. Try the blob reading first;
-    // a bare token is not valid JSON once decoded, so it falls through.
-    try {
-      const o = decodeBlob(t);
-      if (o && typeof o.token === 'string') token = o.token;
-    } catch { /* not a blob — treat it as the token itself */ }
-    if (!token) token = t;
-  } else {
-    try {
-      const o = JSON.parse(t);
-      if (o && typeof o.token === 'string') token = o.token;
-    } catch { /* not JSON either */ }
-  }
-
-  if (!token) return null;
-  return { fp: await generateCode(token), token };
-}
+export const isPin = (v) => /^\d{4}$/.test(String(v ?? ''));
+export const isCode = (v) => /^[A-Z0-9]{4}$/.test(String(v ?? ''));

@@ -9,18 +9,19 @@
 
 import { loadTournament, loadTournamentState } from './config.js';
 import { buildPublic } from './engine.js';
-import { currentPhase, isSignupOpen } from './stateMachine.js';
+import { currentPhase } from './stateMachine.js';
 import { el, clear } from './util.js';
+import { mountOrganizer } from './organizer.js';
 
 const app = document.getElementById('app');
-let tournament, progress, pub; // pub is null pre-draw
+let tournament, progress, pub, state, live; // pub/state are null pre-draw
 
 async function boot() {
   try {
     tournament = await loadTournament();
-    const { roster, progress: prog, state } = await loadTournamentState(tournament);
-    progress = prog;
-    pub = state ? buildPublic(state, tournament.name, roster.length) : null;
+    live = await loadTournamentState(tournament);
+    ({ progress, state } = live);
+    pub = state && live.stage !== 'invalid' ? buildPublic(state, tournament.name, live.roster.length) : null;
   } catch (err) {
     app.append(el('div', { class: 'card danger' }, el('h2', {}, 'Config error'), el('p', {}, String(err.message))));
     return;
@@ -28,6 +29,7 @@ async function boot() {
   document.getElementById('tourney-name').textContent = tournament.name;
   document.title = `${tournament.name} · game-state`;
   render();
+  mountOrganizer(tournament, live);
 }
 
 function teamChip(fp, { winner, dim } = {}) {
@@ -36,28 +38,40 @@ function teamChip(fp, { winner, dim } = {}) {
     el('span', { class: 'mono' }, fp), winner ? el('span', { class: 'check' }, '✓') : null);
 }
 
+// The hero follows the derived stage — the same one every workflow gates on.
+function stageHeadline() {
+  const cur = currentPhase(tournament);
+  switch (live.stage) {
+    case 'registration': return [cur?.label || 'Registration', 'good', 'OPEN', cur?.blurb];
+    case 'closed': return ['Registration closed', 'upcoming', 'DRAW NEXT', 'The roster is published. The draw is next.'];
+    case 'round': return [`Round ${live.round} · ${state.rounds[live.round - 1].label}`, 'good', 'LIVE', 'Captains submit scores for this round. The organizer publishes the whole round when it is complete.'];
+    case 'complete': return ['Champion crowned', 'gold', 'COMPLETE', null];
+    default: return ['Being corrected', 'upcoming', 'PAUSED', 'The organizer is correcting the tournament record. Everything resumes once it is fixed.'];
+  }
+}
+
 function render() {
   clear(app);
-  const cur = currentPhase(tournament);
   const drawn = !!pub;
-  const complete = pub?.status === 'complete';
+  const complete = live.stage === 'complete';
+  const [title, tone, badge, blurb] = stageHeadline();
 
   app.append(el('div', { class: 'card hero' },
     el('div', { class: 'row spread' },
       el('div', {},
         el('div', { class: 'muted' }, 'Current stage'),
-        el('h2', { class: 'phase-title' }, complete ? 'Champion crowned' : (cur ? cur.label : '—')),
+        el('h2', { class: 'phase-title' }, title),
       ),
-      el('span', { class: 'badge ' + (complete ? 'gold' : 'good') }, complete ? 'COMPLETE' : 'LIVE'),
+      el('span', { class: 'badge ' + tone }, badge),
     ),
-    cur?.blurb && !complete ? el('p', { class: 'muted' }, cur.blurb) : null,
-    complete && pub.champion
+    blurb ? el('p', { class: 'muted' }, blurb) : null,
+    complete && pub?.champion
       ? el('p', { class: 'gold big' }, '🏆 Champion: ', el('span', { class: 'mono' }, pub.champion))
       : null,
     drawn && !complete
       ? el('p', { class: 'muted sm' }, `${pub.teamCount || 0} teams · ${pub.matchesDecided}/${pub.matchesTotal} matches decided`)
       : null,
-    isSignupOpen(tournament, progress)
+    live.stage === 'registration'
       ? el('a', { class: 'btn', href: 'index.html' }, 'Register your team →')
       : null,
   ));
@@ -65,7 +79,7 @@ function render() {
   if (drawn) renderBracket(); else renderRoadmap();
 
   app.append(el('p', { class: 'muted sm center' },
-    'Anonymized public bracket · registered captains track their own fixtures in the ',
+    'Anonymized public bracket · captains sign in and submit scores in the ',
     el('a', { href: 'captain.html' }, 'Captain view'), '.'));
 }
 
@@ -114,22 +128,23 @@ function renderRoadmap() {
     })),
   ));
 
-  if (cur?.kind === 'signup') renderSignupProgress();
+  renderField();
 }
 
-// Signups fill sequentially, groupSize at a time — no captain picks a group.
-// Registration closes on capacity (every group full), not on a clock, so this
-// is the thing that actually determines whether "Register your team" shows.
-// `progress` is derived live from the roster repo — there's nothing to
-// publish separately for this to work.
-function renderSignupProgress() {
+// The public roster is only published at a stage change (when registration
+// closes, and at the draw), so while registration is open this shows the
+// room there is, not a live count. Registrations are private until then.
+function renderField() {
+  if (live.stage === 'registration' && !live.roster.length) {
+    app.append(el('div', { class: 'card' },
+      el('h3', {}, 'The field'),
+      el('p', { class: 'muted sm' }, `Up to ${progress.capacity} teams. The organizer reviews registrations and publishes the roster when registration closes.`)));
+    return;
+  }
+  if (!live.roster.length) return;
   app.append(el('div', { class: 'card' },
-    el('h3', {}, 'Signups'),
-    el('p', { class: 'muted sm' }, `${progress.registered}/${progress.capacity} confirmed`,
-      progress.full ? ' — field is full.' : '.'),
-    el('div', { class: 'row' }, progress.groups.map((g) =>
-      el('span', { class: 'badge ' + (g.full ? 'good' : 'upcoming') }, `Group ${g.index + 1}: ${g.filled}/${g.slots}`))),
-  ));
+    el('h3', {}, `The field · ${live.roster.length} team${live.roster.length === 1 ? '' : 's'}`),
+    el('div', { class: 'row' }, live.roster.map((t) => el('code', { class: 'mono chip' }, t.fp)))));
 }
 
 boot();

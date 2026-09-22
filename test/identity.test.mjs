@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  randomToken, hashToken, fingerprint, encodeBlob, decodeBlob,
+  randomToken, hashToken, fingerprint, randomPin, pinHash, isPin, isCode,
 } from '../js/identity.js';
 
 test('randomToken: distinct on every call', () => {
@@ -32,13 +32,20 @@ test('a token cannot be recovered from its hash or its team code', async () => {
   assert.notEqual(code, token);
 });
 
-test('encodeBlob/decodeBlob: round-trips a plain object, no key involved', () => {
-  const obj = { code: 'AB12', matchId: 'r8-m1', myScore: 3, oppScore: 1 };
-  const blob = encodeBlob(obj);
-  assert.notEqual(blob, JSON.stringify(obj)); // it's encoded, not literal JSON
-  assert.deepEqual(decodeBlob(blob), obj);
+test('randomPin: always exactly 4 digits, and actually varies', () => {
+  const pins = Array.from({ length: 500 }, randomPin);
+  assert.ok(pins.every((p) => /^\d{4}$/.test(p)));
+  assert.ok(new Set(pins).size > 400);
+  assert.ok(pins.some((p) => p.startsWith('0')), 'leading zeros are kept, not dropped');
 });
 
-test('decodeBlob rejects garbage rather than silently returning junk', () => {
-  assert.throws(() => decodeBlob('not-a-real-blob!!'));
+test('pinHash: deterministic, and salted by team code', async () => {
+  assert.equal(await pinHash('AB12', '0420'), await pinHash('AB12', '0420'));
+  assert.notEqual(await pinHash('AB12', '0420'), await pinHash('AB12', '0421'));
+  assert.notEqual(await pinHash('AB12', '0420'), await pinHash('CD34', '0420'), 'same PIN, different team, different hash');
+});
+
+test('isPin / isCode', () => {
+  assert.ok(isPin('0420') && !isPin('420') && !isPin('04200') && !isPin('04a0') && !isPin(null));
+  assert.ok(isCode('AB12') && !isCode('ab12') && !isCode('AB1') && !isCode('AB-2'));
 });

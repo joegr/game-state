@@ -1,132 +1,78 @@
-@captain @registration @privacy
-Feature: Captain registration
+@captain @registration @pipeline
+Feature: Registration — intake, queue, accept, publish
   As a captain
-  I want to enter a tournament without handing over a name, an email or an account
-  So that the only thing I reveal is that some anonymous team exists
+  I want to register without an account, and know my team is real only when the organizer says so
+  So that I reveal nothing, and the field can't be padded or raced
 
-  Registration is two generated fields and two buttons. Nothing is typed: the
-  browser mints a random token, the four-character team code is a hash of it,
-  and the score report key is that same token with the code attached. One
-  secret per team, shown twice because it does two different jobs — identifying
-  the team in public, and proving the team in private.
+  Registration travels the same road as a score. The captain submits, intake
+  queues it privately, the batch folds it into the queue, the organizer admits
+  it, and the roster is published only when the organizer closes registration
+  or draws.
 
-  Background:
-    Given a visitor opens the registration page
-    And the active phase is the signup phase
+  Rule: Registering reveals a code and nothing else
 
-  Rule: Registering reveals nothing but a code
+    @smoke
+    Scenario: Two generated fields
+      Given registration is open
+      When the captain generates a team code, then a PIN, then presses Register
+      Then the page dispatches the intake workflow
+      And shows progress until the intake's verdict comes back (about half a minute)
+      And on acceptance the device stays signed in as that team
+      And no name, email or account was asked for
 
-    @smoke @critical
-    Scenario: Field one — the team code
-      When the captain presses the first button
-      Then the browser generates a random token
-      And the first field shows the four-character code derived from it
-      And an entry blob is produced for the captain to send the organizer
-      And no name, email, account or payment was asked for
+    Scenario: The PIN never becomes public
+      Then the private queue stores a salted hash of the PIN, never the PIN
+      And the PIN never appears in any workflow log
+      And nothing about the registration is public until the organizer publishes the roster
 
-    @critical
-    Scenario: Field two — the score report key
-      Given the captain has a team code
-      When they press the second button
-      Then the second field shows their score report key
-      And they are warned to save it, because it cannot be recovered
+    Scenario: Registration closed
+      Given the stage is not "registration"
+      Then the page offers no registration form
+      And an intake that arrives anyway is refused with the gate's reason
 
-    Scenario: The second field cannot be filled before the first
-      Given the captain has not registered yet
-      Then the second button is unavailable
-      # The key is derived from the token, so there is nothing to derive yet.
+  Rule: Concurrent registrations cannot collide
 
     @critical
-    Scenario: The entry the organizer receives is machine-readable
-      Then the entry blob is a single unbroken run of at least sixty characters
-      And the organizer's ingest finds it inside ordinary pasted chat text
-      # A shorter or punctuated entry would be skipped by the scanner and the
-      # captain would never appear on the roster — silently.
+    Scenario: Fifty captains at once
+      When many captains register in the same instant
+      Then each intake run writes its own new, uniquely named inbox file
+      And no registration overwrites another
+      And the batch folds them all in one commit, in order
 
-    @privacy
-    Scenario: The code is all anyone else ever learns
-      Then the published roster carries the code and a hash of the token
-      And the raw token appears in no published file
-      And the code cannot be turned back into the token
+    Scenario: The same code twice
+      Given a team code is already registered, admitted, or waiting in the inbox
+      When another registration derives the same code
+      Then it is refused and the captain is told to generate a new code
+
+    Scenario: Registration closes between intake and batch
+      Given a registration was accepted at intake
+      And the organizer closed registration before the batch ran
+      Then the batch drops it and logs why in rejected.md
+
+  Rule: The organizer admits, privately; the roster is published at a stage change
+
+    Scenario: Admitting
+      When the organizer admits teams
+      Then they are recorded in the private admitted list
+      And the public roster does not change
+
+    Scenario: Taking it back
+      Given a team is admitted but the roster has not been frozen by the draw
+      When the organizer un-admits it
+      Then it returns to the waiting list
+
+    Scenario: Rejecting
+      When the organizer rejects a waiting registration
+      Then it is removed by the next batch
+      And an admitted team cannot be rejected until it is un-admitted
 
     @critical
-    Scenario: Losing the key loses the team
-      Given a captain discards their score report key
-      Then they cannot report a score for their team
-      And the interface warns them to save it before they leave the page
-      # There is no account recovery, because there is no account.
+    Scenario: Publishing the roster
+      When the organizer confirms "close" or "draw"
+      Then roster.md is published as exactly the admitted list, sorted by code
+      And after the draw the roster is frozen — no team can be admitted or removed
 
-    @critical @anti-forgery
-    Scenario: A key cannot be made to claim another team
-      Given someone edits a key to show a different team's code
-      When that key is loaded
-      Then the code is re-derived from the token, not read from the text
-      And they are identified as their own team, never the other one
-
-  Rule: Registration closes on capacity, not on a clock
-
-    The field fills sequentially, `groupSize` at a time, up to `teamCount`.
-    Whether signups are open is a fact about the roster right now.
-
-    Scenario: Progress is visible while the field fills
-      Given some teams are on the published roster
-      When anyone opens the site
-      Then they see how many of the available places are taken
-      And how each group is filling
-
-    Scenario: The last place closes registration
-      Given every group is full
-      When a visitor opens the registration page
-      Then registration is not offered
-      And they are told the field is full
-
-    Scenario: The organizer can close registration early
-      Given places remain
-      When the organizer advances past the signup phase
-      Then registration is not offered to any subsequent visitor
-      # Two independent gates: the organizer's explicit phase, and capacity.
-      # Either one closes it.
-
-  Rule: Entries become teams only when the organizer publishes them
-
-    @intake
-    Scenario: Publishing collected entries
-      Given the organizer has saved received blobs to a file
-      When they run the ingest command
-      Then each readable entry becomes a row in roster.md
-      And roster.md is pushed to the roster repo via gh in one commit
-      And unreadable text in the file is counted and ignored
-
-    @intake
-    Scenario: The inbox is format-agnostic
-      Given the file contains blobs pasted out of chat, with quoting and noise
-      Then the readable blobs are still found and ingested
-      # The organizer should never have to clean up a paste by hand.
-
-    @intake
-    Scenario: The same entry twice is one team
-      Given a captain sent their blob twice
-      When both are ingested
-      Then the roster gains one team
-      And the duplicate is reported as such
-
-    @intake @lock
-    Scenario: A late entry is refused, loudly
-      Given the draw has already run
-      When a new entry is ingested
-      Then it is not published to roster.md
-      And the code of the late team is named in the output
-      And the reason given is that the bracket is rebuilt from the roster
-      # See 01_tournament_setup: the field locks at the draw.
-
-  Rule: The published roster has one canonical order
-
-    @critical @determinism
-    Scenario: Rows are sorted by code, always
-      Given teams registered in some arbitrary order
-      When roster.md is published
-      Then its rows are in code order
-      And publishing the same field in a different order produces the same file
-      # The draw is a shuffle of the roster array, so row order is part of the
-      # bracket's input. One canonical order means one seed can only ever mean
-      # one bracket. See 04_the_draw.
+    Scenario: Nobody left behind by accident
+      Given registrations are still waiting
+      When the organizer plans the draw
+      Then it is refused, naming them, unless the organizer explicitly draws with --leave-pending

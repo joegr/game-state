@@ -2,8 +2,8 @@
 //
 // No DOM, no filesystem, no network, no I/O: just the state transitions of a
 // single-elimination bracket and the two-captain score consensus. Shared by the
-// browser (js/organizer.js, js/report.js) and the Node CLI (tools/advance.mjs)
-// so there is exactly ONE implementation of the rules.
+// browser, the intake/batch/stage workflows (tools/*.mjs) and the organizer CLI
+// (tools/advance.mjs), so there is exactly ONE implementation of the rules.
 
 // ---- config (tournament.md, the organizer-owned spine) ----------------------
 //
@@ -15,18 +15,24 @@
 // are `- Label: value`; matching is case-insensitive and whitespace-tolerant
 // so hand edits don't need to be exact.
 
+const orNone = (v) => (v === '(none)' || v === '' ? null : v);
 const CONFIG_FIELDS = [
   ['Team count', 'teamCount', Number],
   ['Group size', 'groupSize', Number],
   ['Format', 'format', String],
   ['App repo', 'appRepo', String],
   ['Roster repo', 'rosterRepo', String],
+  ['Tentative repo', 'tentativeRepo', orNone],
   ['Active phase', 'activePhase', String],
-  ['Draw seed', 'drawSeed', (v) => (v === '(none)' || v === '' ? null : v)],
+  ['Draw seed', 'drawSeed', orNone],
+  // After the draw, the stage IS the round being played: 1, 2, … or "done".
+  // Only the stage workflow (tools/stage.mjs) moves it.
+  ['Round', 'round', (v) => { const x = orNone(v); return x === null ? null : x === 'done' ? 'done' : Number(x); }],
 ];
+const NULLABLE = new Set(['tentativeRepo', 'drawSeed', 'round']);
 
 export function formatConfigMd(t) {
-  const bullets = CONFIG_FIELDS.map(([label, key]) => `- ${label}: ${t[key] ?? (key === 'drawSeed' ? '(none)' : '')}`).join('\n');
+  const bullets = CONFIG_FIELDS.map(([label, key]) => `- ${label}: ${t[key] ?? (NULLABLE.has(key) ? '(none)' : '')}`).join('\n');
   const header = '| ID | Kind | Label | Blurb |\n|----|------|-------|-------|';
   const rows = t.phases.map((p) => `| ${p.id} | ${p.kind} | ${p.label} | ${p.blurb || ''} |`).join('\n');
   return `# ${t.name}\n\n_${t.tagline || ''}_\n\n${bullets}\n\n## Phases\n\n${header}\n${rows}\n`;
@@ -287,21 +293,96 @@ export function parseResultsMd(md) {
     .filter(Boolean);
 }
 
-// ---- pasted-blob classification ---------------------------------------------
+// ---- the tentative repo (private) --------------------------------------------
 //
-// A decoded blob is either a signup (a bare token) or a score report (a code +
-// token + match result). This is the ONE place that decides which — shared by
-// the CLI's real `ingest` and the admin console's dry-run preview, so the two
-// can never classify the same blob differently.
+// Everything a captain's action produces lands here first: intake.yml writes
+// one inbox file per submission, and batch.yml, the only writer of these
+// queue files, folds them in. Never a captain directly, never a public repo:
+//
+//   signups.md    every registration: code, token hash, PIN hash, when
+//   scores.md     submitted scores awaiting the organizer's acceptance
+//   attempts.md   wrong-PIN attempts, which lock a team at MAX_PIN_ATTEMPTS
+//
+// Nothing here is part of the public record. The organizer accepts teams and
+// results privately (admitted.md, accepted.md, below), and they are published
+// only by a stage change the organizer confirms (tools/stage.mjs).
 
-export function classifyPayload(payload) {
-  if (!payload || typeof payload.token !== 'string') return null;
-  if (typeof payload.matchId === 'string' && typeof payload.fp === 'string') {
-    const { fp, token, matchId, myScore, oppScore, ts } = payload;
-    return { type: 'report', fp, token, matchId, myScore, oppScore, ts };
-  }
-  if (!payload.matchId) return { type: 'signup', token: payload.token };
-  return null;
+export const MAX_PIN_ATTEMPTS = 5;
+
+export function mdTable(title, note, header, rows) {
+  const sep = '|' + header.map(() => '---').join('|') + '|';
+  const head = '| ' + header.join(' | ') + ' |';
+  const body = rows.map((r) => '| ' + r.map((c) => (c ?? '')).join(' | ') + ' |').join('\n');
+  return `# ${title}\n\n_${note}_\n\n${head}\n${sep}${body ? '\n' + body : ''}\n`;
+}
+
+export function tableRows(md) {
+  return (md || '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('|'))
+    .slice(2)
+    .map((line) => line.split('|').slice(1, -1).map((c) => c.trim()))
+    .filter((cells) => cells[0]);
+}
+
+export function formatSignupsMd(signups) {
+  return mdTable('Signups', 'Every registration, admitted or not. PRIVATE — the PIN hashes must never be published.',
+    ['Code', 'Token hash', 'PIN hash', 'Submitted'],
+    signups.map((t) => [t.fp, t.tokenHash, t.pinHash, t.submittedAt]));
+}
+export function parseSignupsMd(md) {
+  return tableRows(md).map(([fp, tokenHash, pinHash, submittedAt]) => ({ fp, tokenHash, pinHash, submittedAt: submittedAt || null }));
+}
+
+// Score is from the reporter's side, "mine-theirs" — exactly computeQueue's input.
+export function formatScoresMd(reports) {
+  return mdTable('Tentative scores', 'Submitted by captains, awaiting the organizer. A score leaves this file when its match is confirmed.',
+    ['Match', 'Team', 'Score', 'Submitted'],
+    reports.map((r) => [r.matchId, r.reporterFp, `${r.myScore}-${r.oppScore}`, r.ts]));
+}
+export function parseScoresMd(md) {
+  return tableRows(md).map(([matchId, reporterFp, score, ts]) => {
+    const [myScore, oppScore] = (score || '').split('-').map(Number);
+    return { matchId, reporterFp, myScore, oppScore, ts: ts || null };
+  });
+}
+
+export function formatAttemptsMd(attempts) {
+  return mdTable('Wrong-PIN attempts', `A team locks after ${MAX_PIN_ATTEMPTS}. The organizer unlocks it by clearing its rows.`,
+    ['Team', 'At'], attempts.map((a) => [a.fp, a.at]));
+}
+export function parseAttemptsMd(md) {
+  return tableRows(md).map(([fp, at]) => ({ fp, at: at || null }));
+}
+
+// The "only open matches" rule, in one place: intake and batch enforce it,
+// the captain view uses it to decide what to offer. Open means: the current
+// round, both sides known, no published winner, and not already accepted by
+// the organizer (an accepted result is waiting to be published at the
+// advance, and nobody can resubmit over it).
+export function validateSubmission(record, fp, { matchId, myScore, oppScore } = {}, accepted = []) {
+  if (!record?.state) return { ok: false, error: 'The draw has not happened yet.' };
+  if (record.stage !== 'round') return { ok: false, error: record.stage === 'complete' ? 'The tournament is over.' : 'Scores are not being taken right now.' };
+  const sides = roundOpenMatches(record).get(matchId);
+  if (!sides) return { ok: false, error: `Match ${matchId} is not open in round ${record.round}.` };
+  if (sides.a !== fp && sides.b !== fp) return { ok: false, error: `Your team is not in match ${matchId}.` };
+  if (accepted.some((r) => r.matchId === matchId)) return { ok: false, error: `The organizer has already accepted the result of ${matchId}.` };
+  const my = Number(myScore), opp = Number(oppScore);
+  if (!Number.isInteger(my) || !Number.isInteger(opp) || my < 0 || opp < 0) return { ok: false, error: 'Scores must be whole numbers, zero or more.' };
+  if (my === opp) return { ok: false, error: 'A tie cannot decide a knockout match. Enter the decisive score.' };
+  return { ok: true, sides, opponent: sides.a === fp ? sides.b : sides.a };
+}
+
+// One live submission per team per match: a resubmission replaces the old one.
+export function upsertScore(reports, report) {
+  return [...reports.filter((r) => !(r.matchId === report.matchId && r.reporterFp === report.reporterFp)), report];
+}
+
+// Scores for matches outside the current round's open set (published, or
+// never valid) are dead weight; the batch drops them whenever it writes.
+// Scores for ACCEPTED matches stay until the round is published, so an
+// accept the organizer takes back still has both submissions behind it.
+export function pruneScores(reports, record) {
+  const open = roundOpenMatches(record || {});
+  return reports.filter((r) => open.has(r.matchId));
 }
 
 // ---- signup capacity (pre-draw groups) --------------------------------------
@@ -397,4 +478,185 @@ export function buildViews(state, teamFps) {
     } else views[fp] = { status: 'scheduled', phaseLabel: 'Awaiting draw' };
   }
   return views;
+}
+
+// ---- reconstruction, invariants, stage, gates ------------------------------------
+//
+// ONE function turns the three public files into the tournament, and every
+// consumer calls it: every page, the intake and batch workflows, and the
+// organizer CLI. It also checks the record's invariants. If any fails, the
+// stage is 'invalid' and every gate refuses every action until the organizer
+// fixes the record. A broken bracket is never "sort of" used.
+//
+// The stage is derived from the published files, never set directly:
+//   registration  no draw yet, and the active phase is a signup phase
+//   closed        no draw yet, and registration has been closed
+//   round         drawn, `Round: k` is being played (record.round = k)
+//   complete      `Round: done` and the final is decided
+//   invalid       the record contradicts itself
+// Only the stage workflow (tools/stage.mjs), dispatched by the organizer
+// after they confirm its plan, changes any of the inputs.
+
+export const STAGES = ['registration', 'closed', 'round', 'complete', 'invalid'];
+
+export function reconstruct(tournament, rosterMd, resultsMd) {
+  const roster = parseRosterMd(rosterMd).sort((a, b) => a.fp.localeCompare(b.fp));
+  const results = parseResultsMd(resultsMd);
+  const progress = signupProgress(roster.map((t) => t.fp), tournament.teamCount, tournament.groupSize);
+  const errors = [];
+  let state = null;
+  const round = tournament.round ?? null;
+
+  const phase = tournament.phases.find((p) => p.id === tournament.activePhase);
+  if (!phase) errors.push(`Active phase "${tournament.activePhase}" is not in the phase table.`);
+
+  const codes = roster.map((t) => t.fp);
+  const dup = codes.find((c, i) => codes.indexOf(c) !== i);
+  if (dup) errors.push(`roster.md lists ${dup} more than once.`);
+  const badCode = codes.find((c) => !/^[A-Z0-9]{4}$/.test(c));
+  if (badCode) errors.push(`roster.md has a malformed team code "${badCode}".`);
+  if (roster.length > progress.capacity) errors.push(`roster.md has ${roster.length} teams; capacity is ${progress.capacity}.`);
+
+  if (!tournament.drawSeed) {
+    if (results.length) errors.push('results.md has results but there is no draw seed.');
+    if (round !== null) errors.push(`tournament.md says Round ${round} but there is no draw seed.`);
+  } else {
+    if (roster.length < 2) errors.push('There is a draw seed but fewer than 2 teams on the roster.');
+    if (phase?.kind === 'signup') errors.push('There is a draw seed but the active phase is still a signup phase.');
+    if (roster.length >= 2) {
+      state = buildDraw(codes, tournament.drawSeed);
+      const R = state.rounds.length;
+      if (round === null) errors.push('There is a draw seed but no Round.');
+      else if (round !== 'done' && !(Number.isInteger(round) && round >= 1 && round <= R)) errors.push(`Round ${round} does not exist — this bracket has rounds 1–${R}.`);
+
+      // Strict replay, in order. The first row that doesn't fit stops it. Rows
+      // after a bad one describe a bracket that may not exist.
+      const limit = round === 'done' ? R : Number(round);
+      for (const r of results) {
+        const hit = findMatch(state, r.matchId);
+        if (hit && hit.round + 1 > limit) { errors.push(`results.md has ${r.matchId} (round ${hit.round + 1}) but only round ${limit} has been reached.`); break; }
+        const v = validateResult(state, r);
+        if (!v.ok) { errors.push(`results.md, ${r.matchId}: ${v.error}`); break; }
+        applyResult(state, r.matchId, r.winner);
+      }
+      // Every round before the current one must be fully decided. A round
+      // only ends when the organizer advances it, and that publishes it whole.
+      if (!errors.length && Number.isInteger(round)) {
+        for (let i = 0; i < round - 1; i++) {
+          const open = state.rounds[i].matches.filter((m) => (m.a || m.b) && !m.winner);
+          if (open.length) { errors.push(`Round ${round} is current but round ${i + 1} still has undecided matches (${open.map((m) => m.id).join(', ')}).`); break; }
+        }
+      }
+      if (!errors.length && round === 'done' && state.status !== 'complete') errors.push('Round is "done" but the final has not been decided.');
+    }
+  }
+
+  const stage = errors.length ? 'invalid'
+    : !tournament.drawSeed ? (phase?.kind === 'signup' ? 'registration' : 'closed')
+    : round === 'done' ? 'complete' : 'round';
+  return { roster, results, progress, state, stage, round: stage === 'round' ? round : null, errors };
+}
+
+// The matches that can be played RIGHT NOW: in the current round, both sides
+// known, no published winner. The single definition of "open" that intake,
+// batch, acceptance and every page use.
+export function roundOpenMatches(record) {
+  const out = new Map();
+  if (record.stage !== 'round' || !record.state) return out;
+  const rd = record.state.rounds[record.round - 1];
+  for (const m of rd.matches) if (m.a && m.b && !m.winner) out.set(m.id, { a: m.a, b: m.b, label: rd.label });
+  return out;
+}
+
+// May the organizer advance from the current round? Only when every open
+// match in it has an accepted result that is valid against the bracket. The
+// returned rows are exactly what the advance publishes, in bracket order.
+export function advanceCheck(record, accepted) {
+  if (record.stage !== 'round') return { ok: false, error: gate('round:advance', record.stage).error };
+  const open = [...roundOpenMatches(record)];
+  const rows = [];
+  const missing = [];
+  for (const [id, s] of open) {
+    const r = accepted.find((x) => x.matchId === id);
+    if (!r) { missing.push(id); continue; }
+    const v = validateResult(record.state, r);
+    if (!v.ok) return { ok: false, error: `accepted result for ${id} is not valid: ${v.error}` };
+    rows.push({ matchId: id, winner: r.winner, scoreWinner: r.scoreWinner, scoreLoser: r.scoreLoser, confirmedAt: r.confirmedAt, sides: s });
+  }
+  if (missing.length) return { ok: false, missing, error: `${missing.length} match(es) in round ${record.round} have no accepted result yet: ${missing.join(', ')}.` };
+  const last = record.round === record.state.rounds.length;
+  return { ok: true, rows, next: last ? 'done' : record.round + 1 };
+}
+
+// ---- the organizer's private acceptance files ------------------------------------
+//
+// admitted.md and accepted.md live in the tentative repo and are written ONLY
+// by the organizer's CLI. They are decisions not yet published. The stage
+// workflow publishes them, and only at a stage change: the roster when
+// registration closes and at the draw, and a round's results when the round
+// is advanced.
+
+export function formatAdmittedMd(teams) {
+  return mdTable('Admitted', 'Teams the organizer has accepted. Published to roster.md when registration closes and at the draw.',
+    ['Code', 'Token hash', 'Registered'], [...teams].sort((a, b) => a.fp.localeCompare(b.fp)).map((t) => [t.fp, t.tokenHash, t.registeredAt]));
+}
+export const parseAdmittedMd = parseRosterMd;
+
+export function formatAcceptedMd(results) {
+  return mdTable('Accepted', 'Results the organizer has accepted. A round is published to results.md, whole, when the organizer advances it.',
+    ['Match', 'Winner', 'Score', 'Accepted'], results.map((r) => [r.matchId, r.winner, `${r.scoreWinner}-${r.scoreLoser}`, r.confirmedAt]));
+}
+export const parseAcceptedMd = parseResultsMd;
+
+// A result may enter the record only if its match is open right now, the
+// winner actually played it, and the score is a real, decisive score for
+// that winner. Used by the CLI before writing and by the replay above, so a
+// row that was invalid when written can never become valid later.
+export function validateResult(state, { matchId, winner, scoreWinner, scoreLoser }) {
+  if (!state) return { ok: false, error: 'there is no draw.' };
+  const sides = playableMatches(state).get(matchId);
+  if (!sides) {
+    const hit = findMatch(state, matchId);
+    return { ok: false, error: !hit ? 'no such match in this bracket.' : hit.match.winner ? `already decided (${hit.match.winner}).` : 'not open yet — both sides are not known.' };
+  }
+  if (winner !== sides.a && winner !== sides.b) return { ok: false, error: `${winner} did not play in it (${sides.a} vs ${sides.b}).` };
+  const w = Number(scoreWinner), l = Number(scoreLoser);
+  if (!Number.isInteger(w) || !Number.isInteger(l) || w < 0 || l < 0) return { ok: false, error: 'scores must be whole numbers, zero or more.' };
+  if (w <= l) return { ok: false, error: `the winner's score (${w}) must be higher than the loser's (${l}).` };
+  return { ok: true, sides };
+}
+
+// Which actions each stage allows. This table is the whole policy. Anything
+// not listed for a stage is refused, and 'invalid' allows nothing.
+export const GATES = {
+  'signup:intake': ['registration'],
+  'signup:admit': ['registration', 'closed'],
+  'signup:reject': ['registration', 'closed'],
+  'phase:close': ['registration'],
+  'phase:reopen': ['closed'],
+  draw: ['closed'],
+  'score:intake': ['round'],
+  'score:accept': ['round'],
+  'score:reject': ['round'],
+  'round:advance': ['round'],
+};
+
+const GATE_WHY = {
+  'signup:intake': 'registration is not open',
+  'signup:admit': 'teams can only be admitted before the draw',
+  'signup:reject': 'registrations can only be rejected before the draw',
+  'phase:close': 'registration is not open',
+  'phase:reopen': 'registration can only be reopened after closing it and before the draw',
+  draw: 'the draw happens exactly once, after registration is closed',
+  'score:intake': 'scores are only taken for the round being played',
+  'score:accept': 'results are only accepted for the round being played',
+  'score:reject': 'scores are only handled for the round being played',
+  'round:advance': 'only a round being played can be advanced',
+};
+
+export function gate(action, stage) {
+  if (!GATES[action]) return { ok: false, error: `Unknown action "${action}".` };
+  if (stage === 'invalid') return { ok: false, error: 'The published record is inconsistent, so nothing can change until the organizer fixes it (`node tools/advance.mjs check`).' };
+  if (GATES[action].includes(stage)) return { ok: true };
+  return { ok: false, error: `Not allowed while the tournament is "${stage}": ${GATE_WHY[action]}.` };
 }

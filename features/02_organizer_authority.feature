@@ -1,136 +1,68 @@
-@organizer @auth @state-machine
+@organizer @auth @critical
 Feature: Organizer authority
   As a captain or spectator
-  I want exactly one person to be able to change the tournament, by a means I can audit
-  So that there is no hidden account, no shared secret and no silent edit
+  I want every change to the tournament to be the organizer's confirmed decision
+  So that nothing moves on its own, and nothing moves that the organizer didn't see
 
-  Being the organizer means one thing: holding a GitHub login with push access
-  to the app repo and the roster repo. There is no key file, no password, no
-  session and no service to compromise. Every change to the record is a commit
-  by a named account, visible in a public repository's history forever.
+  Automation only moves raw submissions into a private queue. Accepting is
+  the organizer's private, reversible decision. Every public change, whether
+  roster, results or stage, is a stage change the organizer confirms by
+  fingerprint, executed by the stage workflow, which only people with write
+  access can start.
 
-  `tools/advance.mjs` is the only thing in this codebase that writes anything,
-  and it only ever writes by shelling out to `gh`. So GitHub's own
-  authorization is the gate — the app does not implement one.
+  Rule: Nothing automatic touches config, the stage, acceptance, or the public record
 
-  Background:
-    Given the app repo and the roster repo are both public
-    And every published change is a commit in one of them
+    Scenario: What the automation may do
+      Then intake may only create new files in the private inbox
+      And batch may only rewrite the private queue files
+      And neither may write tournament.md, roster.md, results.md, admitted.md or accepted.md
 
-  Rule: gh push access is the only credential
-
-    @critical
-    Scenario: Someone without push access cannot change anything
-      Given a person can read both repositories
-      When they attempt to publish a roster entry, a result or a phase change
-      Then GitHub refuses the push
-      And the published tournament is unchanged
-      # There is nothing to bypass in the app, because the app never writes.
+  Rule: A stage change publishes only the exact plan the organizer confirmed
 
     @critical
-    Scenario: The CLI refuses to act unauthenticated
-      Given `gh` is not logged in
-      When the organizer runs any publishing command
-      Then it stops with a message telling them to run `gh auth login`
-      And nothing is written
-
-    @audit
-    Scenario: Every change is attributable
-      When the organizer advances a phase or confirms a result
-      Then a commit appears in the public repository
-      And it names the account that made it, the file and the exact change
-      And anyone can read that history without permission
-
-  Rule: The phase changes only by a push
-
-    The stage lives in one field — "Active phase" in config/tournament.md —
-    and changes only when the organizer publishes a new value. There is no
-    clock anywhere in this picture: no start timestamps, no countdown, nothing
-    that advances on its own.
-
-    Scenario Outline: The stage is read, never derived
-      Given "Active phase" is "<id>"
-      Then the current stage is "<phase>"
-      And every phase before it in the list is "past"
-      And every phase after it in the list is "upcoming"
-
-      Examples:
-        | id            | phase            |
-        | signup        | Registration     |
-        | r16           | Round of 16      |
-        | quarterfinals | Quarter-finals   |
-        | complete      | Champion Crowned |
+    Scenario: Confirming a stage change
+      When the organizer runs a stage change (close, reopen, draw, advance, reset)
+      Then the CLI prints exactly what will be published and a fingerprint of that plan
+      And nothing is published unless the organizer types the fingerprint back
+      When they do
+      Then the CLI dispatches the stage workflow with that fingerprint
 
     @critical
-    Scenario: The organizer advances the stage
-      Given "Active phase" is "signup"
-      When the organizer runs the stage command for "r16"
-      Then config/tournament.md is pushed to the app repo via gh
-      And Pages redeploys
-      And every visitor now sees "Round of 16" as the current stage
+    Scenario: The plan changed after confirmation
+      Given the organizer confirmed plan "X"
+      And an acceptance lands before the stage workflow runs
+      Then the workflow re-plans, gets a different fingerprint, and refuses
+      And writes nothing
 
-    Scenario: The stage never changes without a push
-      Given "Active phase" is "signup"
-      When arbitrarily much real time passes with no commit
-      Then the current stage is still "Registration"
-      # No clock, no timer, no drift. A stage change is indistinguishable from
-      # a git push, because that is exactly what it is.
+    Scenario: No fingerprint, no change
+      When the stage workflow is dispatched without a fingerprint
+      Then it refuses and writes nothing
 
-    Scenario: A bad phase id is refused before it is published
-      When the organizer names a phase that is not in the table
-      Then the CLI lists the valid ids and stops
-      And nothing is pushed
+    Scenario: A second confirmation inside GitHub
+      Given the organizer added themselves as a required reviewer on the "publish" environment
+      Then every stage change also waits for their Approve click in GitHub
 
-    @resilience
-    Scenario: A visitor with a wrong device clock sees what everyone sees
-      Given a visitor's device clock is wrong by any amount
-      Then they see the stage from the last published config
-      # There is no clock read anywhere in this path, so skew cannot produce a
-      # different answer for different visitors.
+    Scenario: Consistent at every instant
+      When a stage change runs
+      Then it writes results.md, then roster.md, then tournament.md last
+      And a reader never sees a stage that the published files don't support yet
 
-  Rule: The organizer's panel hands out commands, it does not run them
+  Rule: gh push access is the credential; the bar is a view
 
-    The organizer gets the ordinary registration page like everyone else, plus
-    a modal on devices where they have set a PIN. The modal shows the live
-    tournament and, beside every action, the exact command that performs it.
-    It never performs one itself — a web page has no push access, and that is
-    the whole authorization model rather than a gap in it.
-
-    @critical
-    Scenario: Every action is a command to copy
-      Given the organizer opens the panel
-      Then each action — advance the stage, run the draw, publish a result,
-        tally reports — is shown as a copyable `advance.mjs` command
-      And the panel states plainly that it cannot write to the repos
-      And running the command needs a terminal with `gh` authenticated
-
-    Scenario: The panel reflects the live state
-      When the organizer opens it
-      Then they see the current phase, the confirmed roster count and,
-        once drawn, the bracket and its seed
-      And the commands offered are the ones appropriate to that state
-      And a pre-draw tournament offers the draw; a drawn one does not
-
-    @dry-run
-    Scenario: Pasting blobs into the panel changes nothing
-      When the organizer pastes signup entries and score reports into the inbox
-      Then each is classified and checked against the live roster
-      And matches whose two reports agree show the command that would publish them
-      And nothing is stored, published or remembered
-      # To actually publish, the same text goes through `advance.mjs ingest`.
-
-    @not-a-credential
-    Scenario: The PIN is a view toggle, not a security boundary
+    Scenario: The organizer bar
       Given the organizer has set a PIN on this device
-      Then it only reveals this panel in this browser
-      And it protects nothing, because everything the panel shows is public
-      And the interface says so in as many words
+      Then the bar appears on every page, stays unlocked across the tab, and opens from #organizer
+      And it reads the private queue with the organizer's own read-only token
+      And every action in it is a command to copy, never a write
+      And the PIN protects nothing: it is a view toggle, and the interface says so
 
-    @durability
-    Scenario: Losing the browser loses nothing
-      Given the organizer clears site data, or switches to another machine
-      When they open the panel again
-      Then the full tournament is still there, refetched from the two repos
-      And the only thing lost is unpublished score reports on the old machine
-      # There is no backup to take. The record is git history; durability is
-      # GitHub's problem, not the organizer's.
+    Scenario: Controls the organizer has
+      Then the organizer can admit, un-admit and reject registrations
+      And accept, take back, decide, or clear the scores of any open match
+      And unlock a team or issue it a new PIN
+      And force a batch, inspect the inbox and the batch's rejections
+      And close, reopen, draw, advance and reset, each confirmed by fingerprint
+
+    Scenario: Losing the organizer's device loses nothing
+      Then the record and the queue live in git
+      And another device picks up exactly where this one left off

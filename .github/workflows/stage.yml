@@ -1,0 +1,65 @@
+name: stage
+
+# The ONLY thing that writes the public record (roster.md, results.md) and the
+# tournament's stage (config/tournament.md). Nothing triggers it automatically:
+# it runs only when the organizer dispatches it, and `node tools/advance.mjs`
+# does that only after showing the organizer the exact plan and getting their
+# confirmation. The confirmed plan's fingerprint is passed in `expect`, and the
+# run refuses if the live files would now produce any other plan.
+#
+# Optional second confirmation, inside GitHub: add yourself as a required
+# reviewer on the "publish" environment (Settings → Environments → publish),
+# and every run waits for you to click Approve before it writes anything.
+#
+# Needs secret PUBLISH_TOKEN: a fine-grained token with Contents read/write on
+# the app repo, the roster repo, and the tentative repo. Its pushes to the app
+# repo also trigger deploy.yml, so the site picks up the new stage.
+run-name: stage ${{ inputs.action }} (${{ inputs.expect }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        required: true
+        type: choice
+        options: [close, reopen, draw, advance, reset]
+      expect:
+        description: fingerprint of the plan the organizer confirmed
+        required: true
+        type: string
+      seed:
+        description: draw seed (draw only)
+        required: false
+        type: string
+      leave_pending:
+        description: draw even though registrations are still waiting
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One stage change at a time, never cancelled halfway.
+concurrency:
+  group: stage
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: publish
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Re-plan, check against the confirmed plan, publish
+        env:
+          GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+          INPUT_ACTION: ${{ inputs.action }}
+          INPUT_EXPECT: ${{ inputs.expect }}
+          INPUT_SEED: ${{ inputs.seed }}
+          INPUT_LEAVE_PENDING: ${{ inputs.leave_pending }}
+        run: node tools/stage.mjs

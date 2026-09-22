@@ -1,0 +1,57 @@
+# game-state — INTAKE. Lives in the PRIVATE tentative repo (pushed there by
+# `node tools/advance.mjs install`). One run per captain submission, dispatched
+# by the public site with a token that can do nothing but start workflows.
+#
+# The run checks the stage gate, PIN, lockout, and match (tools/intake.mjs),
+# then writes the submission as its own new file in inbox/, and finally asks
+# for a batch. Runs are NOT serialized. They can't collide, because each one
+# only ever creates a new, uniquely named file.
+name: intake
+run-name: intake ${{ inputs.receipt }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      receipt:
+        description: random id chosen by the browser (it polls for this run by name)
+        required: true
+        type: string
+      kind:
+        required: true
+        type: choice
+        options: [signup, score]
+      payload:
+        description: URL-encoded submission fields
+        required: true
+        type: string
+
+permissions:
+  contents: write   # create inbox/ files in THIS repo
+  actions: write    # dispatch batch.yml
+
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: __APP_REPO__
+          path: app
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Validate and queue
+        # The submission (which carries the PIN) is NOT passed here: a step's
+        # env block is printed in the run log, and these logs are readable
+        # with the public submit token. intake.mjs reads the inputs from the
+        # event file instead, which is never printed.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_REPO: __APP_REPO__
+          TENTATIVE_REPO: ${{ github.repository }}
+        run: node app/tools/intake.mjs
+      - name: Ask for a batch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run batch.yml --repo "${{ github.repository }}" || echo "::warning::could not dispatch batch.yml — the hourly batch will pick this up"

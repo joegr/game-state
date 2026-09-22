@@ -6,9 +6,7 @@
 // the roster repo's markdown. This module IS the "database read" for every
 // page.
 
-import {
-  parseConfigMd, parseRosterMd, parseResultsMd, buildDraw, applyResult, signupProgress,
-} from './engine.js';
+import { parseConfigMd, reconstruct } from './engine.js';
 
 async function loadRepoText(url) {
   try {
@@ -26,30 +24,33 @@ export async function loadTournament() {
   return parseConfigMd(await res.text());
 }
 
+// `Roster repo` is normally owner/name on GitHub; a full http(s) URL is used
+// as a base instead (the local dev harness, tools/dev.mjs, relies on this).
+function rosterFileUrl(tournament, path) {
+  const repo = tournament.rosterRepo || '';
+  return /^https?:\/\//.test(repo)
+    ? `${repo.replace(/\/+$/, '')}/${path}`
+    : `https://raw.githubusercontent.com/${repo}/main/${path}`;
+}
+
 export function loadRosterMd(tournament) {
-  return loadRepoText(`https://raw.githubusercontent.com/${tournament.rosterRepo}/main/roster.md`);
+  return loadRepoText(rosterFileUrl(tournament, 'roster.md'));
 }
 
 export function loadResultsMd(tournament) {
-  return loadRepoText(`https://raw.githubusercontent.com/${tournament.rosterRepo}/main/results.md`);
+  return loadRepoText(rosterFileUrl(tournament, 'results.md'));
 }
 
-// The one reconstruction every page needs. `state` is null pre-draw — the
-// draw itself is just buildDraw(roster, tournament.drawSeed) replayed with
-// every confirmed result, so nothing about the bracket needs to be published
-// beyond the seed (in tournament.md) and the results ledger (in the roster
-// repo). Rows are sorted by team code before the draw, same as
-// formatRosterMd writes them — the shuffle depends on that order, not just
-// the seed, so this MUST match how the roster was written.
+// The one reconstruction, the same function the intake, batch and stage
+// workflows and the organizer CLI use (engine.js → reconstruct). Returns the
+// record: { roster, results, progress, state, stage, round, errors }. `stage`
+// drives every page: what is offered, and what is refused.
+//
+// raw.githubusercontent.com caches for about 5 minutes, so a page can lag a
+// stage change by that much. The workflows read through the API and are
+// authoritative, so a stale page can offer something, but it can never
+// make something invalid happen.
 export async function loadTournamentState(tournament) {
   const [rosterMd, resultsMd] = await Promise.all([loadRosterMd(tournament), loadResultsMd(tournament)]);
-  const roster = parseRosterMd(rosterMd).sort((a, b) => a.fp.localeCompare(b.fp));
-  const fps = roster.map((t) => t.fp);
-  const progress = signupProgress(fps, tournament.teamCount, tournament.groupSize);
-
-  if (!tournament.drawSeed) return { roster, progress, state: null };
-
-  const state = buildDraw(fps, tournament.drawSeed);
-  for (const r of parseResultsMd(resultsMd)) applyResult(state, r.matchId, r.winner);
-  return { roster, progress, state };
+  return reconstruct(tournament, rosterMd, resultsMd);
 }

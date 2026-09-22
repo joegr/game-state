@@ -5,7 +5,8 @@ import {
   buildDraw, applyResult, computeQueue, buildPublic, buildViews,
   playableMatches, currentPhaseLabel, buildGroups, signupProgress, buildSignupProgress,
   formatRosterMd, parseRosterMd, formatResultsMd, parseResultsMd,
-  formatConfigMd, parseConfigMd, classifyPayload,
+  formatConfigMd, parseConfigMd,
+  formatSignupsMd, parseSignupsMd, formatScoresMd, parseScoresMd, formatAttemptsMd, parseAttemptsMd,
 } from '../js/engine.js';
 
 const teams = (n) => Array.from({ length: n }, (_, i) => `T${String(i).padStart(2, '0')}`);
@@ -232,8 +233,10 @@ const CONFIG = {
   format: 'single-elimination',
   appRepo: 'joegr/game-state',
   rosterRepo: 'joegr/game-state-roster',
+  tentativeRepo: 'joegr/game-state-tentative-scores',
   activePhase: 'signup',
   drawSeed: null,
+  round: null,
   phases: [
     { id: 'signup', kind: 'signup', label: 'Registration', blurb: 'Captains register their team.' },
     { id: 'final', kind: 'round', label: 'The Final', blurb: '' },
@@ -268,37 +271,31 @@ test('parseConfigMd: an empty blurb cell round-trips as an empty string', () => 
   assert.equal(t.phases.length, 2);
 });
 
-// ---- pasted-blob classification ----------------------------------------------
-
-test('classifyPayload: tells a signup from a score report, and rejects the rest', () => {
-  assert.deepEqual(classifyPayload({ v: 1, token: 'tok' }), { type: 'signup', token: 'tok' });
-
-  const report = { v: 1, fp: 'AB12', token: 'tok', matchId: 'r8-m1', myScore: 2, oppScore: 1, ts: 'T' };
-  assert.deepEqual(classifyPayload(report), {
-    type: 'report', fp: 'AB12', token: 'tok', matchId: 'r8-m1', myScore: 2, oppScore: 1, ts: 'T',
-  });
-
-  for (const junk of [null, undefined, {}, 'a string', 42, { fp: 'AB12' }, { token: 123 }]) {
-    assert.equal(classifyPayload(junk), null, `expected null for ${JSON.stringify(junk)}`);
-  }
-  // A half-formed report (matchId but no code) is not silently treated as a signup.
-  assert.equal(classifyPayload({ token: 'tok', matchId: 'r8-m1' }), null);
+test('parseConfigMd: Round reads as null, a number, or "done"', () => {
+  assert.match(formatConfigMd(CONFIG), /- Round: \(none\)/);
+  assert.equal(parseConfigMd(formatConfigMd({ ...CONFIG, round: 3 })).round, 3);
+  assert.equal(parseConfigMd(formatConfigMd({ ...CONFIG, round: 'done' })).round, 'done');
 });
 
-// ---- results ledger -----------------------------------------------------------
+// ---- the tentative repo (private) --------------------------------------------
 
-test('formatResultsMd / parseResultsMd round-trip confirmed results', () => {
-  const results = [
-    { matchId: 'r8-m1', winner: 'AB12', scoreWinner: 2, scoreLoser: 1, confirmedAt: '2026-01-01T00:00:00Z' },
-    { matchId: 'r8-m2', winner: 'CD34', scoreWinner: 3, scoreLoser: 0, confirmedAt: '2026-01-02T00:00:00Z' },
+test('signups.md round-trips, PIN hash included', () => {
+  const rows = [{ fp: 'AB12', tokenHash: 'th1', pinHash: 'ph1', submittedAt: '2026-01-01T00:00:00Z' }];
+  assert.deepEqual(parseSignupsMd(formatSignupsMd(rows)), rows);
+  assert.deepEqual(parseSignupsMd(formatSignupsMd([])), []);
+  assert.deepEqual(parseSignupsMd(''), []);
+});
+
+test('scores.md round-trips into exactly the shape computeQueue consumes', () => {
+  const rows = [
+    { matchId: 'r4-m1', reporterFp: 'AB12', myScore: 3, oppScore: 1, ts: '2026-01-01T00:00:00Z' },
+    { matchId: 'r4-m1', reporterFp: 'CD34', myScore: 1, oppScore: 3, ts: '2026-01-01T00:01:00Z' },
   ];
-  const md = formatResultsMd(results);
-  assert.match(md, /# Results/);
-  assert.match(md, /r8-m1/);
-  assert.deepEqual(parseResultsMd(md), results);
+  assert.deepEqual(parseScoresMd(formatScoresMd(rows)), rows);
 });
 
-test('formatResultsMd: an empty ledger still parses back to an empty list', () => {
-  assert.deepEqual(parseResultsMd(formatResultsMd([])), []);
+test('attempts.md round-trips', () => {
+  const rows = [{ fp: 'AB12', at: '2026-01-01T00:00:00Z' }];
+  assert.deepEqual(parseAttemptsMd(formatAttemptsMd(rows)), rows);
 });
 

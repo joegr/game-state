@@ -11,16 +11,15 @@ name: Deploy game-state to Pages
 # js/config.js), so a roster/results change needs no redeploy here at all.
 
 on:
-  # Human edits to the site / config, made via `git push` or via
-  # `tools/advance.mjs stage|draw` (both publish through `gh`, which is a
-  # push like any other and triggers this the same way).
+  # Code pushes, and every stage change: stage.yml commits the new
+  # config/tournament.md with PUBLISH_TOKEN (a personal token, so its push
+  # triggers this, unlike a push made with a workflow's own GITHUB_TOKEN).
   push:
     branches: [main]
     paths:
       - 'index.html'
       - 'bracket.html'
       - 'captain.html'
-      - 'report.html'
       - '404.html'
       - 'css/**'
       - 'js/**'
@@ -47,6 +46,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Captains submit by dispatching the private repo's intake workflow, with
+      # a token that can ONLY start workflows there and read their check
+      # results (it cannot read or write any file). It lives in the SUBMIT_TOKEN
+      # secret and is written into the PUBLISHED site here — never into git.
+      # Without it, the site says submissions aren't connected yet.
+      - name: Connect captain submissions
+        env:
+          SUBMIT_TOKEN: ${{ secrets.SUBMIT_TOKEN }}
+        run: |
+          repo="$(sed -n 's/^- Tentative repo: *//p' config/tournament.md)"
+          if [ -z "$SUBMIT_TOKEN" ] || [ -z "$repo" ] || [ "$repo" = "(none)" ]; then
+            echo "::warning::SUBMIT_TOKEN or Tentative repo not set — captains cannot submit on this deploy."
+            exit 0
+          fi
+          REPO="$repo" node -e 'require("fs").writeFileSync("js/submit-config.js",
+            "export const SUBMIT = { repo: " + JSON.stringify(process.env.REPO) + ", token: " + JSON.stringify(process.env.SUBMIT_TOKEN) + " };\n")'
+          echo "submissions connected to $repo"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

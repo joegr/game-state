@@ -1,220 +1,236 @@
 # 🎲 game-state
 
-**simple state-based tournaments** — a tournament engine that lives entirely as
-static files and **markdown** on GitHub Pages.
+**simple state-based tournaments**: a single-elimination tournament run
+entirely on GitHub, with markdown files as the database and GitHub Actions as
+the only backend.
 
-No database, no backend, no accounts, no server. The record *is* markdown in two
-public repositories, and it only ever changes because the organizer pushed a
-commit. The **organizer** is the only privileged role, and the only thing that
-makes them the organizer is push access to those repositories.
-
-- **Markdown is the database of record.** There is no JSON anywhere in this app.
-  `config/tournament.md` holds the tournament's spine; `roster.md` and
-  `results.md` — in a separate, public roster repo — hold the field and the
-  results. That's the whole data model.
-- **Nothing is stored that can be derived.** The bracket is never saved. It is
-  rebuilt from `roster.md` + a published draw seed, then replayed through every
-  row of `results.md`, freshly, every time anyone opens a page. Same function in
-  the browser and in the CLI — one algorithm, three consumers.
-- **Deploy-driven stage.** Registration → knockouts → final is an explicit
-  `Active phase` field. Nothing advances on a timer; a stage change *is* a push.
-- **Anonymous by code.** Captains register with one button. The browser mints a
-  random token and derives a **four-character code** (`A–Z0–9`) from its hash.
-  No name, no email, no account. The published roster carries the code and the
-  token's hash — never the token.
-- **`gh` is the authorization boundary.** `tools/advance.mjs` is the only thing
-  that writes anything, and it only ever writes by shelling out to `gh`. So
-  GitHub's own push permissions are the gate; this app does not implement one.
-- **Three-assent results.** A match advances when **both captains** report
-  matching scores **and** the organizer publishes the result.
+- **Markdown is the record.** `config/tournament.md` (the spine), `roster.md`
+  and `results.md` (the public record). No JSON is stored anywhere, and there's
+  no server or database.
+- **Captains need no account.** They register with a generated team code
+  (public) and PIN (secret), and submit scores from the captain view.
+- **Nothing reaches the public record without the organizer.** Submissions
+  queue privately. The organizer accepts them, and they're published only at a
+  stage change the organizer has seen and confirmed.
+- **Hard, deterministic stage gates.** The stage is derived from the published
+  files, and one table decides what each stage allows. A record that doesn't
+  replay cleanly freezes everything.
 
 ---
 
 ## How it fits together
 
 ```
-joegr/game-state ─ the app repo (static site, GitHub Pages)
-├─ index.html        registration: two generated fields — your team code and
-│                    your score report key                        (js/home.js)
-├─ bracket.html      public bracket + current stage + roadmap (js/tournament.js)
-├─ report.html       report a score — key required, only your own open
-│                    matches are offered                        (js/report.js)
-├─ captain.html      where your team stands                       (js/app.js …)
-│
-├─ config/tournament.md   ★ the organizer-owned spine: name, format, phases,
-│                           Active phase, Draw seed
-└─ js/
-   ├─ engine.js      the PURE engine — draw, advance, consensus, markdown
-   │                 parse/format. No DOM, no I/O. Runs in the browser AND Node.
-   ├─ config.js      loadTournamentState() — the ONE reconstruction every page calls
-   ├─ identity.js    random token → hash → four-character code; key format
-   └─ organizer.js   the organizer modal — a status view that copies commands
+joegr/game-state                 PUBLIC — the site, the spine, the engine
+├─ index.html / captain.html / bracket.html          (js/home.js, captain.js, tournament.js)
+├─ config/tournament.md          ★ phases, Active phase, Draw seed, Round
+├─ js/engine.js                  the pure engine: bracket, invariants, stage, gates
+├─ js/pipeline.js                intake / batch / stage-change decisions (pure)
+├─ tools/advance.mjs             the organizer CLI
+├─ tools/{intake,batch,stage}.mjs    what the workflows run
+├─ tentative/.github/workflows/  intake.yml + batch.yml, installed into the private repo
+└─ .github/workflows/
+   ├─ stage.yml                  ★ the ONLY writer of the public record (organizer-dispatched)
+   ├─ deploy.yml                 publishes the site; injects the submit token
+   └─ ci.yml                     tests + the live record must replay cleanly
 
-joegr/game-state-roster ─ the roster repo (public, data only)
-├─ roster.md         ★ confirmed teams: code · token hash · registered
-└─ results.md        ★ confirmed results, append-only: match · winner · score
+joegr/game-state-roster          PUBLIC — the record everyone reads
+├─ roster.md                     ★ the field (published at close and at the draw)
+└─ results.md                    ★ results (published a whole round at a time)
 
-tools/   (organizer CLI — the ONLY writer, and it only writes via `gh`)
-├─ advance.mjs       ingest · draw · tally · result · stage · purge · status
-└─ lib.mjs           ghPutFile() — commits through the GitHub Contents API
-
-test/                node:test suite (npm test) — the pure engine + identity
-features/            Gherkin spec of the intended behavior — docs, not run by CI
-.github/workflows/
-├─ deploy.yml        publish the static site to Pages (on push)
-└─ ci.yml            npm test + validate the live markdown record
+joegr/game-state-tentative-scores   PRIVATE — the queue
+├─ inbox/                        one file per submission (intake writes; batch consumes)
+├─ signups.md scores.md attempts.md rejected.md     written only by batch
+├─ admitted.md accepted.md       written only by the organizer's CLI
+└─ .github/workflows/intake.yml batch.yml
 ```
 
-★ = durable state. Everything else is derived or static.
+★ = what the public sees. Pages reconstruct the bracket from these files on
+every visit, using the same `reconstruct()` the workflows and CLI use.
 
-No build step — vanilla ES modules, served as-is.
+## The pipeline — teams and scores travel the same road
+
+```
+ captain submits ──▶ INTAKE ──▶ BATCH ──▶ organizer ACCEPTS ──▶ organizer confirms a STAGE CHANGE ──▶ public
+ (captain view)    intake.yml  batch.yml  admit / confirm       close · draw · advance              roster.md
+                   1 run per   1 at a     (private,             (plan + fingerprint → stage.yml)    results.md
+                   submission  time       reversible)
+```
+
+| Step | Who / what | Writes | Checks |
+|---|---|---|---|
+| Intake | `intake.yml`, one run per submission, in parallel | a new, uniquely named `inbox/` file | stage gate, PIN + lockout, admitted team, current-round open match |
+| Batch | `batch.yml`, one at a time | `signups.md`, `scores.md`, `attempts.md`, `rejected.md` (one commit) | every gate again, **now**. Anything no longer valid is dropped and logged |
+| Accept | you, `advance.mjs admit` / `confirm` / `result` | `admitted.md`, `accepted.md` (private) | gate, bracket validity, current round |
+| Publish | `stage.yml`, dispatched by you after you confirm the plan | `results.md` → `roster.md` → `tournament.md` last | re-plans and refuses unless the plan fingerprint is the one you confirmed |
+
+Concurrent submissions can't collide: intake only ever creates new files, and
+the batch is the only writer of the queue files. Your queue changes (reject,
+unlock, re-PIN) also go in as inbox entries, applied in order.
+
+### Stages and gates
+
+The stage is **derived** from the published files, never set directly:
+
+| Stage | Meaning | Allowed |
+|---|---|---|
+| `registration` | no draw, phase is a signup phase | signup intake · admit/reject · close |
+| `closed` | no draw, registration closed | admit/reject · reopen · draw |
+| `round` *k* | drawn, `Round: k` | score intake (round *k* only) · accept/reject scores · advance (only when every round-*k* match is accepted) |
+| `complete` | `Round: done`, final decided | nothing (reset to run another) |
+| `invalid` | the record contradicts itself | **nothing** except look commands and `reset` |
+
+`invalid` covers:
+
+- results without a draw, or a draw seed without a round;
+- a result for a match that doesn't exist, a winner who didn't play, a duplicate, or a non-decisive score;
+- a result from a round not yet reached, or an earlier round left incomplete;
+- duplicate or malformed team codes, or a roster over capacity.
+
+`node tools/advance.mjs check` lists any of these. CI runs the same check on
+every push.
 
 ---
 
 ## Set it up
 
-1. **Create two repos.** The app repo (name it `game-state` so the site
-   publishes at `https://<user>.github.io/game-state/` — all paths are
-   relative, so any name works) and a **public** roster repo for the data.
-2. **Configure the tournament** in `config/tournament.md`: `Team count`,
-   `Group size`, `Format`, `App repo`, `Roster repo`, and `Active phase`
-   (start at `signup`). The `## Phases` table lists the stages in order; none
-   of them carry dates, because nothing here runs on a clock. Leave
-   `Draw seed` as `(none)` — the draw sets it.
-3. **Authenticate the CLI:** `gh auth login`, with push access to both repos.
-   That login *is* your organizer credential. There is no key to generate.
-4. **Enable Pages:** *Settings → Pages → Source = GitHub Actions*, then push.
-   Registration opens as soon as that deploy lands.
+1. **Repos.** `joegr/game-state` (this one, public) and
+   `joegr/game-state-roster` (public) already exist. Create
+   **`joegr/game-state-tentative-scores`** as a **private** repo, with no
+   template and an empty `main`.
+2. **Install the private workflows.** Run `gh auth refresh -s workflow`, then
+   `node tools/advance.mjs install`. That pushes `intake.yml`, `batch.yml`,
+   the empty queue files and a README into the private repo.
+3. **Tokens.** All are fine-grained personal access tokens, owner `joegr`:
+
+   | Name | Repositories | Permissions | Where it goes |
+   |---|---|---|---|
+   | `SUBMIT_TOKEN` | tentative only | **Actions: read & write**, **Checks: read** | secret in `game-state`. deploy.yml writes it into the **public site**, so treat it as public |
+   | `PUBLISH_TOKEN` | game-state, game-state-roster, tentative | **Contents: read & write** | secret in `game-state` |
+   | organizer read token | tentative only | **Contents: read** | pasted into the organizer bar, stays in your browser |
+
+   Your own `gh` login needs push access to all three repos.
+4. **Optional GitHub-side approval.** Under *Settings → Environments →
+   publish*, add yourself as a required reviewer. Every stage change then waits
+   for your Approve click as well.
+5. **Pages.** *Settings → Pages → Source = GitHub Actions*. Push to deploy.
+6. **Smoke test.** Register two or three teams from the site, then run `admit`,
+   `close`, `draw`, one match, and `advance`. See *Run a tournament* below.
 
 ---
 
 ## Run a tournament
 
-Everything the organizer does is a command in `tools/`. The **Organizer** button
-in the corner of the registration page opens a panel showing the live state with
-a copy button beside every command you might need — but it cannot change
-anything, because nothing in a browser can.
+The **⚙ Organizer** bar (every page, bottom right; `#organizer` opens it)
+shows the queue with a copy button beside each command. Every command:
 
 ```bash
-node tools/advance.mjs status              # where things stand
-node tools/advance.mjs ingest entries.txt  # publish received signups to roster.md
-node tools/advance.mjs stage groups        # close registration (a push)
-node tools/advance.mjs draw                # publish the draw seed (a push)
-node tools/advance.mjs ingest reports.txt  # collect score reports (stays local)
-node tools/advance.mjs tally               # check two-captain agreement
-node tools/advance.mjs result r16-m1 88BD 2 1   # publish a confirmed result
+node tools/advance.mjs status            # stage, public vs private, what's allowed now
+node tools/advance.mjs queue             # teams waiting · scores side by side · lockouts · inbox
+node tools/advance.mjs check             # invariants of the record and the queue
+
+# teams
+node tools/advance.mjs admit AB12 CD34   # or --all        (private)
+node tools/advance.mjs unadmit AB12      #                 (private)
+node tools/advance.mjs reject-signup AB12 --note "duplicate"
+
+# stage changes: each prints its plan + a fingerprint and publishes nothing until you type it back
+node tools/advance.mjs close             # publishes the admitted roster, closes registration
+node tools/advance.mjs reopen
+node tools/advance.mjs draw              # publishes the frozen roster, seeds, opens round 1
+
+# scores (current round only)
+node tools/advance.mjs confirm r8-m1     # or --all: accept agreed results   (private)
+node tools/advance.mjs unconfirm r8-m1
+node tools/advance.mjs result r8-m2 AB12 3 1     # decide a dispute or walkover yourself
+node tools/advance.mjs reject-score r8-m2        # clear the submissions so both resubmit
+node tools/advance.mjs advance           # publishes the whole round, opens the next (or completes)
+
+# PINs and plumbing
+node tools/advance.mjs unlock AB12 | repin AB12
+node tools/advance.mjs batch             # fold the inbox now
+node tools/advance.mjs reset             # start over (also shows its plan first)
 ```
 
-1. **Collect signups.** Captains send you their entry blob through whatever
-   channel you already use. Save them to a file — quoting and noise are fine,
-   the parser finds the blobs — and `ingest` it. New teams are published to
-   `roster.md` in one commit.
-2. **Close registration** with `stage <next-phase>`. That push is the only
-   thing that closes signup; registration also closes on its own once every
-   group is full.
-3. **Draw.** `draw` publishes a seed to `config/tournament.md`. Anyone with
-   `roster.md` and that seed can regenerate the identical bracket — that is the
-   point of publishing it.
-
-   > ⚠️ **The draw freezes the field.** The bracket is rebuilt from the roster
-   > every time it is read, so after the draw, adding a team or changing the
-   > seed would produce a *different* bracket underneath results that are
-   > already public. Both are refused: `ingest` won't publish a late team, and
-   > `draw` won't run twice over published results.
-
-4. **Collect and tally scores.** Score reports `ingest` into a local `scores/`
-   directory — they are working state, never published. `tally` checks for two
-   mirrored reports and prints the ready-to-run `result` command for each
-   agreed match.
-5. **Publish results.** `result` validates against the live bracket and appends
-   to `results.md`. That commit *is* the confirmation — there is no separate
-   override path. A dispute or a no-show is decided the same way: you choose a
-   winner, in public, under your own account.
-6. **There is nothing to back up.** The record is the commit history of two
-   public repos. Lose your laptop and you lose only unconfirmed score reports.
+Add `--confirm <fingerprint>` to confirm a stage change non-interactively, and
+`--wait` to watch the workflow. If anything changed between your confirmation
+and the run, such as an acceptance landing, `stage.yml` refuses and writes
+nothing. Re-run the command to see the new plan.
 
 ### The captain's side
 
-Registration (`index.html`) is two generated fields and two buttons — nothing is
-typed and nothing is collected:
+- **Register** (`index.html`). Generate a team code, generate a PIN, then press
+  Register. It goes through GitHub Actions, about 30 seconds. **Save the code and
+  PIN.** The device stays signed in.
+- **Submit scores** (`captain.html`). Only your match in the current round is
+  offered. Submit your score and your opponent's. The organizer compares both
+  captains' submissions, and the round is published when the organizer
+  advances it.
+- **On a new device**, sign in with the code and PIN. After 5 wrong PINs the
+  team locks until the organizer unlocks it or issues a new PIN.
 
-1. **Your team code** — press the button, get a random four-character code. That
-   is how you appear on the public bracket. It also produces the entry blob to
-   send the organizer; you are not on the roster until they ingest it.
-2. **Your score report key** — press the second button, get `CODE:token`. **Save
-   it.** It is the only thing that proves you are that team, and there is no
-   account recovery, because there is no account.
+### Rehearse offline
 
-To report a result, go to `report.html` and paste that key. The page verifies it
-against the published roster, then offers you **only your own matches that are
-actually open** — both sides known, no winner recorded. Anything else (not
-ingested yet, not drawn, waiting on an opponent, eliminated, already decided) is
-named explicitly instead of silently showing nothing. Submitting produces a blob
-you send the organizer; the page itself posts nowhere.
+Every file has a local override, so the whole pipeline runs against scratch
+files with no way to touch a real repo:
 
-`captain.html` is a read-only "where do I stand" view of the same public data.
+```bash
+export TOURNAMENT_FILE=/tmp/t/tournament.md ROSTER_FILE=/tmp/t/roster.md \
+       RESULTS_FILE=/tmp/t/results.md TENTATIVE_DIR=/tmp/t/tentative
+INPUT_KIND=signup INPUT_PAYLOAD="token=$(openssl rand -hex 16)&pin=1234" INPUT_RECEIPT=rehearsal01 \
+  node tools/intake.mjs                  # what intake.yml does for one submission
+node tools/advance.mjs batch             # runs the batch locally
+node tools/advance.mjs admit --all && node tools/advance.mjs close
+```
 
 ### Propagation
 
-A published change is visible once caches expire: GitHub Pages serves the site
-with `max-age=600`, and `raw.githubusercontent.com` serves the roster markdown
-with `max-age=300` (and `access-control-allow-origin: *`, which is what makes
-the runtime fetch work at all). A stage change also has to wait for the Pages
-deploy. If you're testing and see something stale, hard-refresh.
-
-### Try it locally
-
-```bash
-npm test
-```
-
-Serve the site with any static server (e.g. `python3 -m http.server`) and open
-`index.html`.
-
-To exercise the CLI without touching anything real, point all three files at
-local scratch copies — no network, no `gh` writes:
-
-```bash
-TOURNAMENT_FILE=/tmp/t.md ROSTER_FILE=/tmp/roster.md RESULTS_FILE=/tmp/results.md node tools/advance.mjs status
-```
+GitHub Pages caches the site for `max-age=600`, and `raw.githubusercontent.com`
+caches the roster markdown for `max-age=300`, so a page can lag a stage change
+by a few minutes. The workflows and CLI read through the GitHub API and are
+authoritative. A stale page can offer something, but the gates refuse anything
+invalid.
 
 ---
 
-## Privacy & integrity model
+## Security & integrity model
 
-**What exists:** four-character codes, a hash of each team's token, timestamps,
-and match results — all in public markdown. Nothing else. No names, no emails,
-no accounts, no analytics, no third-party service.
+**Who can change what**
 
-**What a score report proves:** it carries the captain's token, which the
-organizer checks against the hash published in `roster.md`. That proves the
-report came from whoever registered that team, so **one captain cannot forge
-the other's report** — which is what makes two-captain agreement mean anything.
+- **Captains** can only start the intake workflow. Every submission is checked
+  there, and nothing a captain does touches a public file.
+- **Automation** (intake, batch) only moves raw submissions into the
+  **private** queue. It never touches config, the stage, acceptance, or the
+  public record.
+- **The organizer** decides everything:
+  - Acceptance is private and reversible.
+  - Every public change is a stage change you confirm by fingerprint.
+  - That change is executed by `stage.yml`, which only people with write access
+    can dispatch. With the optional environment reviewer, it also waits for
+    your approval inside GitHub.
 
-**What it does not prove.** This is a shared-secret scheme, not a signature
-scheme: the organizer necessarily sees the tokens they verify against, so they
-*could* produce a report for any team. That is a real difference from an
-earlier design of this app, which used per-captain keypairs. It is an accepted
-trade-off, because the organizer is trusted by construction anyway — they
-publish every result and could simply publish a false one directly.
+**PINs.** The team code is public, so it only identifies; the PIN proves. PIN
+hashes live only in the private repo, and a team locks after 5 wrong PINs.
+Submissions travel in the dispatch request and are read from the event file,
+never logged. (Several wrong guesses at the same instant can each see the old
+count, so a lockout can be exceeded by a guess or two.)
 
-**What actually constrains the organizer** is publicity, not cryptography:
+**Risks you accept with a public submit token**
 
-- Every result is a commit in a public repo, attributed to their account, with
-  a timestamp, permanently.
-- The draw is a **seeded** shuffle of a **published** roster. Publish the seed
-  and anyone can regenerate the bracket — so a rigged draw is a seed that
-  doesn't produce the bracket that was published.
-- `roster.md` is sorted by code, so one seed can only ever mean one bracket
-  regardless of how the file was written.
-- CI rebuilds the bracket from the live markdown on every push and fails if any
-  published result no longer fits it.
+- **Anyone can copy it from the page source.** With it they can start intake
+  runs (each is validated and rejected, but it burns private-repo Actions
+  minutes: 2,000 a month free, and the hourly batch backstop alone uses about
+  720). They can also cancel or disable workflow runs, and exhaust the token's
+  5,000 requests an hour, which captains' polling shares.
+- **It cannot read or write any file**, and it cannot publish anything.
+- **Fine-grained tokens expire.** When `SUBMIT_TOKEN` does, submissions stop
+  until you replace the secret and redeploy.
 
-**"Anonymous"** means the public record carries no identities. The organizer
-still sees whatever the channel captains send their entries over reveals.
-
----
+**What the record proves.** Every public change is a commit, attributed and
+permanent, made by `stage.yml` from a plan you confirmed. The draw is a seeded
+shuffle of the published roster, sorted by code, so anyone can reproduce the
+bracket from the published seed.
 
 ## Roadmap
 
-- **Elo module** — track ratings across tournaments, seed draws by rating.
+- **Elo module**: track ratings across tournaments and seed draws by rating.
