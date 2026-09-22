@@ -44,6 +44,9 @@ function render() {
   const cur = currentPhase(tournament, now);
   const drawn = pub.rounds && pub.rounds.length > 0;
   const complete = pub.status === 'complete';
+  // Before the first phase starts, currentPhase() falls back to phases[0] with
+  // status 'upcoming' — distinguish that from a phase that has actually begun.
+  const notStarted = !complete && cur?.status === 'upcoming';
 
   // Hero — live stage + countdown, from the clock.
   const countdown = el('span', { class: 'mono big' }, '—');
@@ -57,15 +60,16 @@ function render() {
   app.append(el('div', { class: 'card hero' },
     el('div', { class: 'row spread' },
       el('div', {},
-        el('div', { class: 'muted' }, 'Current stage'),
+        el('div', { class: 'muted' }, notStarted ? 'Next stage' : 'Current stage'),
         el('h2', { class: 'phase-title' }, complete ? 'Champion crowned' : (cur ? cur.label : '—')),
       ),
-      el('span', { class: 'badge ' + (complete ? 'gold' : 'good') }, complete ? 'COMPLETE' : 'LIVE'),
+      el('span', { class: 'badge ' + (complete ? 'gold' : notStarted ? 'upcoming' : 'good') },
+        complete ? 'COMPLETE' : notStarted ? 'UPCOMING' : 'LIVE'),
     ),
     cur?.blurb && !complete ? el('p', { class: 'muted' }, cur.blurb) : null,
     complete && pub.champion
       ? el('p', { class: 'gold big' }, '🏆 Champion: ', el('span', { class: 'mono' }, pub.champion))
-      : (cur && isFinite(cur.endMs) ? el('p', {}, 'Next stage in ', countdown) : null),
+      : (cur && isFinite(cur.endMs) ? el('p', {}, (notStarted ? 'Starts in ' : 'Next stage in '), countdown) : null),
     drawn && !complete
       ? el('p', { class: 'muted sm' }, `${pub.teamCount || 0} teams · ${pub.matchesDecided}/${pub.matchesTotal} matches decided`)
       : null,
