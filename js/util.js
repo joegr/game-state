@@ -17,8 +17,8 @@ export function el(tag, attrs = {}, ...children) {
 
 export function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
 
-// localStorage-backed captain key store (per tournament name).
-export const keyStore = {
+// localStorage-backed team identity ({fp, token}), per tournament name.
+export const identityStore = {
   k: (name) => `game-state:captain:${name}`,
   save(name, data) { localStorage.setItem(this.k(name), JSON.stringify(data)); },
   load(name) {

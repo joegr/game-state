@@ -11,7 +11,12 @@ export function currentPhase(config) {
   return config.phases.find((p) => p.id === config.activePhase) || config.phases[0];
 }
 
-// Convenience: is registration open right now?
-export function isSignupOpen(config) {
-  return currentPhase(config)?.kind === 'signup';
+// Convenience: is registration open right now? Two independent facts have to
+// hold: the organizer has the tournament in its signup phase, AND the
+// published roster (`pub`, config/public.json — even pre-draw it carries
+// signup progress once the organizer has exported it) hasn't filled every
+// group. `pub` is optional; with none published yet, capacity is assumed open.
+export function isSignupOpen(config, pub) {
+  if (currentPhase(config)?.kind !== 'signup') return false;
+  return !(pub && pub.full);
 }

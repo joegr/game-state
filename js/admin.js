@@ -1,33 +1,31 @@
 // game-state — organizer console (admin.html).
 //
-// Tokenless and key-only. The organizer unlocks with ORGANIZER_PRIVATE_KEY (from
-// keygen.mjs), which is the SOLE privileged credential — stored encrypted under a
-// passphrase in this browser and never sent anywhere. Everything runs client-side:
+// A team's identity is a token; the roster holds only its hash. The PIN below
+// is a local device lock, not a credential — the real gate on publishing
+// anything is who has push access to the repos.
 //
-//   • paste sealed blobs (signups + score reports) → decrypt with the private key
+//   • paste blobs (signups + score reports) → verify each token's hash
 //   • run the seeded draw, tally two-captain consensus, confirm results
-//   • export the config JSON (public/bracket/queue) to commit & push
+//   • export config JSON (public/bracket/queue) + roster.md to commit & push
 //
-// No GitHub token, no server. Publishing = committing the exported JSON; the
-// Pages `push` deploy then serves it.
+// No server. Publishing = committing the exported files; the Pages `push`
+// deploy serves the app repo, and the roster repo serves roster.md directly.
 
 import { el, clear, copy } from './util.js';
-import {
-  seal, unseal, boxSenderPub, publicRaw, fingerprint,
-  encryptWithPassphrase, decryptWithPassphrase,
-} from './crypto.js';
+import { hashToken, fingerprint, encodeBlob, decodeBlob } from './identity.js';
 import {
   buildDraw, applyResult, computeQueue, buildPublic, buildViews,
-  currentPhaseLabel, playableMatches,
+  currentPhaseLabel, playableMatches, signupProgress, buildSignupProgress,
+  formatRosterMd, parseRosterMd,
 } from './engine.js';
 
-const VAULT = 'game-state:admin:vault';
+const PIN = 'game-state:admin:pin';
 const WORK = 'game-state:admin:work';
 const app = document.getElementById('app');
 
 let tournament = null;
-let priv = null;                 // organizer private key (in memory, post-unlock)
-let work = loadWork();           // { teams:[{fp,captainPublicKey}], reports:[], matches:null, seed:null }
+let unlocked = false;            // local-device gate only, reset on reload
+let work = loadWork();           // { teams:[{fp,tokenHash,registeredAt}], reports:[], matches:null, seed:null }
 let toastMsg = null;
 
 function loadWork() {
@@ -48,67 +46,52 @@ async function boot() {
   render();
 }
 
-async function keyMatchesOrganizer(privStr) {
-  if (!tournament.organizerPublicKey) return false;
-  try { const t = 'verify:' + Math.random(); return (await unseal(await seal(t, tournament.organizerPublicKey), privStr)) === t; }
-  catch { return false; }
-}
-
 function render() {
   clear(app);
-  if (!priv) return localStorage.getItem(VAULT) ? renderUnlock() : renderSetup();
+  if (!unlocked) return localStorage.getItem(PIN) ? renderUnlock() : renderSetup();
   renderConsole();
 }
 
-// ---- login: setup / unlock -------------------------------------------------
+// ---- login: local device PIN -----------------------------------------------
+//
+// This is NOT a security boundary — there's no key behind it, just a hash of
+// a PIN in this browser's localStorage. It exists so a stray visitor to
+// admin.html doesn't start clicking things by accident. The actual gate on
+// changing anything real is who has push access to this repo and to the
+// roster repo — nothing here can publish without a manual commit.
 
-function renderSetup() {
-  if (!tournament.organizerPublicKey) {
-    app.append(el('div', { class: 'card danger' },
-      el('h2', {}, 'Organizer key not configured'),
-      el('p', { class: 'muted' }, 'Set config/tournament.json → organizerPublicKey (the public half from keygen.mjs) and redeploy before using the console.')));
-    return;
-  }
-  const priv_ta = el('textarea', { class: 'input mono', rows: '4', placeholder: 'paste organizer.keys.json contents, or just the privateKey string' });
-  const file = el('input', { type: 'file', accept: '.json', class: 'input', onchange: async (e) => { const f = e.target.files[0]; if (f) priv_ta.value = await f.text(); } });
-  const p1 = el('input', { type: 'password', class: 'input', placeholder: 'choose a passphrase', autocomplete: 'new-password' });
-  const p2 = el('input', { type: 'password', class: 'input', placeholder: 'confirm passphrase', autocomplete: 'new-password' });
+async function renderSetup() {
+  const p1 = el('input', { type: 'password', class: 'input', placeholder: 'choose a PIN', autocomplete: 'new-password' });
+  const p2 = el('input', { type: 'password', class: 'input', placeholder: 'confirm PIN', autocomplete: 'new-password' });
 
   app.append(el('div', { class: 'card' },
-    el('h2', {}, 'Unlock the console'),
-    el('p', { class: 'muted' }, 'Load your organizer private key (from keygen.mjs) once on this device. It is encrypted under your passphrase and stored only in this browser — never committed or sent anywhere. This key is the only thing that separates you from a regular visitor.'),
-    el('label', {}, 'Organizer private key'), file, priv_ta,
-    el('label', {}, 'Passphrase'), p1, p2,
+    el('h2', {}, 'Set up this console'),
+    el('p', { class: 'muted' }, 'Choose a PIN for this device. It only locks this browser against accidental clicks — it is not a credential, and it does not protect anything published. Anyone with push access to the repos can already do everything this console can.'),
+    el('label', {}, 'PIN'), p1, p2,
     el('button', { class: 'btn', onclick: async () => {
-      let privStr = priv_ta.value.trim();
-      try { const j = JSON.parse(privStr); if (j.privateKey) privStr = j.privateKey; } catch { /* raw key string */ }
-      if (p1.value.length < 8) return alert('Use a passphrase of at least 8 characters.');
-      if (p1.value !== p2.value) return alert('Passphrases do not match.');
-      if (!await keyMatchesOrganizer(privStr)) return alert('That private key does not match this tournament’s organizer public key.');
-      localStorage.setItem(VAULT, await encryptWithPassphrase(privStr, p1.value));
-      priv = privStr; toast('Console unlocked.'); render();
-    } }, 'Verify & unlock'),
+      if (p1.value.length < 4) return alert('Use at least 4 characters.');
+      if (p1.value !== p2.value) return alert('PINs do not match.');
+      localStorage.setItem(PIN, await hashToken(p1.value));
+      unlocked = true; toast('Console set up.'); render();
+    } }, 'Set PIN'),
   ));
 }
 
 function renderUnlock() {
-  const pass = el('input', { type: 'password', class: 'input', placeholder: 'passphrase', autocomplete: 'current-password' });
+  const pin = el('input', { type: 'password', class: 'input', placeholder: 'PIN', autocomplete: 'current-password' });
   const form = el('form', { class: 'card' },
-    el('h2', {}, 'Organizer login'),
-    el('p', { class: 'muted' }, 'Enter your passphrase to unlock the console on this device.'),
-    pass,
+    el('h2', {}, 'Organizer console'),
+    el('p', { class: 'muted' }, 'Enter your PIN to unlock the console on this device.'),
+    pin,
     el('div', { class: 'row' },
       el('button', { type: 'submit', class: 'btn' }, 'Unlock'),
-      el('button', { type: 'button', class: 'btn ghost', onclick: () => { if (confirm('Remove the stored organizer key from this device?')) { localStorage.removeItem(VAULT); render(); } } }, 'Reset device'),
+      el('button', { type: 'button', class: 'btn ghost', onclick: () => { if (confirm('Remove the PIN from this device? (Your working state is unaffected.)')) { localStorage.removeItem(PIN); render(); } } }, 'Reset PIN'),
     ),
   );
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    try {
-      const privStr = await decryptWithPassphrase(localStorage.getItem(VAULT), pass.value);
-      if (!await keyMatchesOrganizer(privStr)) throw new Error('key mismatch');
-      priv = privStr; render();
-    } catch { alert('Wrong passphrase (or the key no longer matches this tournament).'); }
+    if (await hashToken(pin.value) !== localStorage.getItem(PIN)) return alert('Wrong PIN.');
+    unlocked = true; render();
   });
   app.append(form);
 }
@@ -123,7 +106,7 @@ function renderConsole() {
     el('h2', {}, 'Organizer console'),
     el('div', { class: 'row' },
       el('a', { class: 'btn ghost sm', href: 'bracket.html', target: '_blank' }, 'View public ↗'),
-      el('button', { class: 'btn ghost sm', onclick: () => { priv = null; render(); } }, 'Lock'),
+      el('button', { class: 'btn ghost sm', onclick: () => { unlocked = false; render(); } }, 'Lock'),
     ),
   ));
 
@@ -145,43 +128,42 @@ function renderConsole() {
   renderBackup();
   renderDanger();
 
-  app.append(el('p', { class: 'muted sm center' }, 'Publish by committing the exported config JSON and pushing — Pages redeploys on push.'));
+  app.append(el('p', { class: 'muted sm center' }, 'Publish by committing the exported files and pushing — Pages redeploys the app repo on push, and the roster repo serves roster.md directly.'));
 }
 
 function renderInbox() {
-  const ta = el('textarea', { class: 'input mono', rows: '3', placeholder: 'paste sealed signup entries and/or score reports (any amount, any format — blobs are auto-detected)' });
+  const ta = el('textarea', { class: 'input mono', rows: '3', placeholder: 'paste signup entries and/or score reports (any amount, any format — blobs are auto-detected)' });
   app.append(el('div', { class: 'card' },
     el('h3', {}, 'Inbox'),
-    el('p', { class: 'muted sm' }, 'Paste blobs captains sent you. Signups add teams; score reports are matched to teams and matches. Only your key can open them.'),
+    el('p', { class: 'muted sm' }, 'Paste blobs captains sent you. Signups add teams; score reports are checked against the roster and matched to matches.'),
     ta,
     el('button', { class: 'btn', onclick: async (e) => {
       e.target.disabled = true;
       const r = await ingest(ta.value);
-      toast(`Processed: +${r.added} team(s), ${r.scores} score report(s)${r.dup ? `, ${r.dup} duplicate` : ''}${r.bad ? `, ${r.bad} unreadable/unknown` : ''}.`, r.bad && !r.added && !r.scores ? 'danger' : 'good');
+      toast(`Processed: +${r.added} team(s), ${r.scores} score report(s)${r.dup ? `, ${r.dup} duplicate` : ''}${r.bad ? `, ${r.bad} unreadable/unauthenticated` : ''}.`, r.bad && !r.added && !r.scores ? 'danger' : 'good');
       render();
     } }, 'Process blobs'),
   ));
 }
 
 async function ingest(text) {
-  const tokens = text.match(/[A-Za-z0-9_-]{100,}/g) || [];
-  const rawMap = new Map();
-  for (const t of work.teams) rawMap.set(await publicRaw(t.captainPublicKey), t.fp);
+  const tokens = text.match(/[A-Za-z0-9_-]{60,}/g) || [];
   let added = 0, scores = 0, dup = 0, bad = 0;
   for (const tok of tokens) {
     let payload;
-    try { payload = JSON.parse(await unseal(tok, priv)); } catch { bad++; continue; }
-    if (payload.captainPublicKey && !payload.matchId) {
-      const fp = await fingerprint(payload.captainPublicKey);
+    try { payload = decodeBlob(tok); } catch { bad++; continue; }
+    if (payload.token && !payload.matchId) {
+      // Signup: the code is always DERIVED from the token, never taken as
+      // given — that's what makes it unforgeable.
+      const fp = await fingerprint(payload.token);
       if (work.teams.some((t) => t.fp === fp)) { dup++; continue; }
-      work.teams.push({ fp, captainPublicKey: payload.captainPublicKey });
-      rawMap.set(await publicRaw(payload.captainPublicKey), fp);
+      work.teams.push({ fp, tokenHash: await hashToken(payload.token), registeredAt: new Date().toISOString() });
       added++;
-    } else if (payload.matchId) {
-      const fp = rawMap.get(boxSenderPub(tok)); // authenticated signer
-      if (!fp) { bad++; continue; }
-      work.reports = work.reports.filter((r) => !(r.matchId === payload.matchId && r.reporterFp === fp));
-      work.reports.push({ reporterFp: fp, matchId: payload.matchId, myScore: payload.myScore, oppScore: payload.oppScore, ts: payload.ts });
+    } else if (payload.matchId && payload.fp && payload.token) {
+      const team = work.teams.find((t) => t.fp === payload.fp);
+      if (!team || await hashToken(payload.token) !== team.tokenHash) { bad++; continue; } // wrong token for this code
+      work.reports = work.reports.filter((r) => !(r.matchId === payload.matchId && r.reporterFp === payload.fp));
+      work.reports.push({ reporterFp: payload.fp, matchId: payload.matchId, myScore: payload.myScore, oppScore: payload.oppScore, ts: payload.ts });
       scores++;
     } else bad++;
   }
@@ -190,6 +172,7 @@ async function ingest(text) {
 }
 
 function renderRegistration() {
+  const progress = signupProgress(work.teams.map((t) => t.fp), tournament.teamCount, tournament.groupSize);
   const seed = el('input', { class: 'input', placeholder: 'draw seed (optional)' });
   app.append(el('div', { class: 'card' },
     el('h3', {}, 'Registration'),
@@ -201,6 +184,83 @@ function renderRegistration() {
         work.matches = buildDraw(work.teams.map((t) => t.fp), s);
         work.seed = work.matches.seed; saveWork(); toast('Bracket drawn.'); render();
       } }, 'Run the draw')),
+  ));
+
+  renderSignupProgress(progress);
+  renderRoster();
+}
+
+// Signups fill sequentially, groupSize at a time — this is what the public
+// site reads to decide whether registration is still open. It's only true for
+// visitors once you publish it below; nothing updates automatically.
+function renderSignupProgress(progress) {
+  const out = el('div', {});
+  app.append(el('div', { class: 'card' },
+    el('h3', {}, 'Signup capacity'),
+    el('p', { class: 'muted sm' },
+      `${progress.registered}/${progress.capacity} confirmed`,
+      progress.full ? ' — field is full.' : '.',
+      ' The public site only knows this once you publish it below.'),
+    el('div', { class: 'row' }, progress.groups.map((g) =>
+      el('span', { class: 'badge ' + (g.full ? 'good' : 'upcoming') }, `Group ${g.index + 1}: ${g.filled}/${g.slots}`))),
+    el('button', { class: 'btn ghost sm', onclick: async (e) => {
+      e.target.disabled = true; e.target.textContent = 'Generating…';
+      const obj = buildSignupProgress(work.teams.map((t) => t.fp), tournament.name, tournament.teamCount, tournament.groupSize);
+      const blob = new Blob([JSON.stringify(obj, null, 2) + '\n'], { type: 'application/json' });
+      clear(out);
+      out.append(el('div', { class: 'row' },
+        el('a', { class: 'btn ghost sm', href: URL.createObjectURL(blob), download: 'public.json' }, 'Download public.json'),
+        el('button', { class: 'btn ghost sm', onclick: async (ev) => { ev.target.textContent = (await copy(JSON.stringify(obj, null, 2))) ? 'Copied ✓' : 'Copy failed'; } }, 'Copy'),
+      ));
+      e.target.disabled = false; e.target.textContent = 'Publish signup progress';
+    } }, 'Publish signup progress'),
+    out,
+  ));
+}
+
+// The roster (team codes + token hashes) lives in a SEPARATE public repo —
+// see config/tournament.json → rosterRepo — not in this app's config/. That's
+// what makes it independently auditable regardless of this repo's own
+// visibility. Import re-hydrates `work.teams` from what's already published
+// there (e.g. on a fresh device); Publish writes out the current state to
+// commit there.
+function renderRoster() {
+  const importOut = el('div', {});
+  const publishOut = el('div', {});
+  app.append(el('div', { class: 'card' },
+    el('h3', {}, 'Roster'),
+    el('p', { class: 'muted sm' }, `Lives at github.com/${tournament.rosterRepo || '(rosterRepo not set)'} as roster.md, not in this repo.`),
+    el('div', { class: 'row' },
+      el('button', { class: 'btn ghost sm', disabled: !tournament.rosterRepo || null, onclick: async (e) => {
+        e.target.disabled = true; e.target.textContent = 'Fetching…';
+        try {
+          const res = await fetch(`https://raw.githubusercontent.com/${tournament.rosterRepo}/main/roster.md`, { cache: 'no-cache' });
+          if (!res.ok) throw new Error(`${res.status}`);
+          const parsed = parseRosterMd(await res.text());
+          let addedN = 0, conflictN = 0;
+          for (const t of parsed) {
+            const existing = work.teams.find((x) => x.fp === t.fp);
+            if (!existing) { work.teams.push(t); addedN++; }
+            else if (existing.tokenHash !== t.tokenHash) conflictN++;
+          }
+          saveWork();
+          clear(importOut);
+          importOut.append(el('p', { class: 'muted sm' }, `Imported: +${addedN} team(s)${conflictN ? `, ${conflictN} conflicting (kept local)` : ''}.`));
+          toast(`Roster import: +${addedN} team(s).`); render();
+        } catch (err) { alert('Could not fetch the roster: ' + err.message); }
+        e.target.disabled = false; e.target.textContent = 'Import from roster repo';
+      } }, 'Import from roster repo'),
+      el('button', { class: 'btn ghost sm', onclick: (e) => {
+        const md = formatRosterMd(work.teams);
+        const blob = new Blob([md], { type: 'text/markdown' });
+        clear(publishOut);
+        publishOut.append(el('div', { class: 'row' },
+          el('a', { class: 'btn ghost sm', href: URL.createObjectURL(blob), download: 'roster.md' }, 'Download roster.md'),
+          el('button', { class: 'btn ghost sm', onclick: async (ev) => { ev.target.textContent = (await copy(md)) ? 'Copied ✓' : 'Copy failed'; } }, 'Copy'),
+        ));
+      } }, 'Publish roster'),
+    ),
+    importOut, publishOut,
   ));
 }
 
@@ -263,19 +323,16 @@ function renderQueue() {
   }
 }
 
-async function buildOutputs() {
+function buildOutputs() {
   const teamCount = work.teams.length;
-  const plaintext = buildViews(work.matches, work.teams.map((t) => t.fp));
-  const pubByFp = new Map(work.teams.map((t) => [t.fp, t.captainPublicKey]));
-  const views = {};
-  for (const t of work.teams) views[t.fp] = await seal(JSON.stringify(plaintext[t.fp]), pubByFp.get(t.fp));
+  const views = buildViews(work.matches, work.teams.map((t) => t.fp));
   return {
     'public.json': buildPublic(work.matches, tournament.name, teamCount),
     'bracket.json': {
       schemaVersion: 1, generatedAt: new Date().toISOString(),
       activePhase: work.matches.status === 'complete' ? 'complete' : currentPhaseLabel(work.matches),
       seed: work.matches.seed, teamCount,
-      note: 'Per-captain encrypted views. Each captain can decrypt only their own entry.', views,
+      note: 'Per-team views. The bracket is already public, so these are plaintext — only score reports need a token.', views,
     },
     'queue.json': {
       schemaVersion: 1, generatedAt: new Date().toISOString(),
@@ -289,9 +346,9 @@ function renderExport() {
   app.append(el('div', { class: 'card' },
     el('h3', {}, 'Export & publish'),
     el('p', { class: 'muted sm' }, 'Generate the config files, replace them under config/ in your repo, then commit & push. Pages redeploys on push.'),
-    el('button', { class: 'btn', onclick: async (e) => {
+    el('button', { class: 'btn', onclick: (e) => {
       e.target.disabled = true; e.target.textContent = 'Generating…';
-      const files = await buildOutputs();
+      const files = buildOutputs();
       clear(out);
       for (const [name, obj] of Object.entries(files)) {
         const blob = new Blob([JSON.stringify(obj, null, 2) + '\n'], { type: 'application/json' });
@@ -309,24 +366,21 @@ function renderExport() {
 // ---- backup & restore ------------------------------------------------------
 //
 // The working state (roster, reports, bracket) lives ONLY in this browser's
-// localStorage, and the captains' public keys exist nowhere else — so clearing
-// site data, switching devices, or a storage eviction would make every future
-// round unsealable and end the tournament. A backup is itself a sealed box to
-// the organizer's OWN public key: safe to store anywhere (repo, chat, disk),
-// restorable only with the organizer private key.
+// localStorage — clearing site data, switching devices, or a storage eviction
+// would lose it. A backup is an encoded copy of `work`, readable by anyone who
+// has it. It holds token HASHES, never raw tokens: enough to verify a report,
+// not enough to forge one.
 
 const BACKUP_V = 1;
 
-async function makeBackup() {
-  return seal(JSON.stringify({
-    v: BACKUP_V, tournament: tournament.name, savedAt: new Date().toISOString(), work,
-  }), tournament.organizerPublicKey);
+function makeBackup() {
+  return encodeBlob({ v: BACKUP_V, tournament: tournament.name, savedAt: new Date().toISOString(), work });
 }
 
-async function readBackup(text) {
-  const tok = (text.match(/[A-Za-z0-9_-]{100,}/g) || [])[0];
+function readBackup(text) {
+  const tok = (text.match(/[A-Za-z0-9_-]{40,}/g) || [])[0];
   if (!tok) throw new Error('No backup blob found in that text.');
-  const payload = JSON.parse(await unseal(tok, priv));
+  const payload = decodeBlob(tok);
   const w = payload.work;
   if (!w || !Array.isArray(w.teams) || !Array.isArray(w.reports)) throw new Error('That is not a game-state backup.');
   return {
@@ -341,29 +395,24 @@ function renderBackup() {
 
   app.append(el('div', { class: 'card' },
     el('h3', {}, 'Backup & restore'),
-    el('p', { class: 'muted sm' }, 'This browser is the only copy of the roster, the reports and the bracket. Download a backup after every session — it is sealed to your own organizer key, so it is safe to keep anywhere, and only that key can open it.'),
-    el('button', { class: 'btn', onclick: async (e) => {
-      e.target.disabled = true; e.target.textContent = 'Sealing…';
-      try {
-        const blob = new Blob([await makeBackup() + '\n'], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = el('a', { href: url, download: `game-state-backup-${new Date().toISOString().slice(0, 10)}.txt` });
-        document.body.append(a); a.click(); a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 10000);
-        e.target.textContent = 'Download backup';
-      } catch (err) { alert('Could not seal the backup: ' + err.message); e.target.textContent = 'Download backup'; }
-      e.target.disabled = false;
+    el('p', { class: 'muted sm' }, 'This browser is the only copy of the working state (reports, bracket). Download a backup after every session.'),
+    el('button', { class: 'btn', onclick: (e) => {
+      const blob = new Blob([makeBackup() + '\n'], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = el('a', { href: url, download: `game-state-backup-${new Date().toISOString().slice(0, 10)}.txt` });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
     } }, 'Download backup'),
     el('hr', {}),
     el('h4', {}, 'Restore'),
     el('p', { class: 'muted sm' }, 'Replaces everything on this device with the contents of the backup.'),
     file, ta,
-    el('button', { class: 'btn ghost', onclick: async () => {
+    el('button', { class: 'btn ghost', onclick: () => {
       try {
-        const { work: restored, savedAt } = await readBackup(ta.value);
+        const { work: restored, savedAt } = readBackup(ta.value);
         if (!confirm(`Restore the backup from ${savedAt}? It has ${restored.teams.length} team(s) and ${restored.reports.length} report(s), and REPLACES the current state on this device.`)) return;
         work = restored; saveWork(); toast(`Restored backup from ${savedAt}.`); render();
-      } catch (err) { alert('Could not restore: ' + (err.message || 'that blob is not readable with this organizer key.')); }
+      } catch (err) { alert('Could not restore: ' + err.message); }
     } }, 'Restore from backup'),
   ));
 }
@@ -372,7 +421,7 @@ function renderDanger() {
   app.append(el('details', { class: 'card' }, el('summary', {}, 'Danger zone'),
     el('div', { class: 'row' },
       el('button', { class: 'btn ghost', onclick: () => {
-        if (!confirm('Discard the local working state (teams, reports, bracket) on this device? Your key stays.')) return;
+        if (!confirm('Discard the local working state (teams, reports, bracket) on this device?')) return;
         if (!confirm('This cannot be undone and there is no other copy. Download a backup first if you have not. Really reset?')) return;
         work = blankWork(); saveWork(); toast('Working state cleared.'); render();
       } }, 'Reset tournament state'),

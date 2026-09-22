@@ -1,37 +1,38 @@
 // game-state — index.html dispatcher.
 //
-// • Organizer's device (admin access was set up here → an encrypted vault exists
-//   in localStorage) → go straight to the admin dashboard.
+// • Organizer's device (admin access was set up here → a console PIN exists in
+//   localStorage) → go straight to the admin dashboard.
 // • Everyone else → a clean one-line, one-button anonymous captain sign-up.
 //
-// The vault check is just routing convenience, not security: the dashboard is
-// still gated by the passphrase + organizer key regardless of where you land.
+// The PIN check is just routing convenience, not security: it's a local
+// device lock, not a credential — see js/admin.js.
 
-import { loadTournament } from './config.js';
-import { el, clear, keyStore } from './util.js';
-import { generateKeypair, seal, fingerprint } from './crypto.js';
+import { loadTournament, loadPublic } from './config.js';
+import { isSignupOpen } from './stateMachine.js';
+import { el, clear, identityStore } from './util.js';
+import { randomToken, fingerprint } from './identity.js';
 import { renderSubmission } from './signup.js';
 
-const ADMIN_VAULT = 'game-state:admin:vault';
+const ADMIN_PIN = 'game-state:admin:pin';
 const app = document.getElementById('app');
 
-if (localStorage.getItem(ADMIN_VAULT)) {
+if (localStorage.getItem(ADMIN_PIN)) {
   location.replace('admin.html');
 } else {
   boot();
 }
 
 async function boot() {
-  let tournament;
+  let tournament, pub;
   try {
-    tournament = await loadTournament();
+    [tournament, pub] = await Promise.all([loadTournament(), loadPublic()]);
   } catch (e) {
     app.append(el('div', { class: 'card danger' }, 'Config error: ' + e.message));
     return;
   }
   document.getElementById('tourney-name').textContent = tournament.name;
   document.title = `${tournament.name} · game-state`;
-  render(tournament);
+  render(tournament, pub);
 }
 
 function footer() {
@@ -40,25 +41,26 @@ function footer() {
     el('a', { href: 'captain.html#/captain' }, 'Captain view'));
 }
 
-function render(tournament) {
+function render(tournament, pub) {
   clear(app);
-  const existing = keyStore.load(tournament.name);
+  const existing = identityStore.load(tournament.name);
 
   // Already registered on this device → show the team code + a way in.
   if (existing) {
     app.append(
       el('div', { class: 'card center hero' },
         el('p', { class: 'muted' }, 'You are registered as'),
-        el('p', { class: 'mono big' }, existing.fingerprint),
+        el('p', { class: 'mono big' }, existing.fp),
         el('a', { class: 'btn', href: 'captain.html#/captain' }, 'Open captain view'),
       ),
       footer());
     return;
   }
 
-  // Registration not configured/open yet.
-  if (!tournament.organizerPublicKey) {
-    app.append(el('div', { class: 'card center hero' }, el('p', { class: 'muted' }, 'Registration is not open yet.')), footer());
+  // Signup phase over, or every group already full.
+  if (!isSignupOpen(tournament, pub)) {
+    const msg = pub?.full ? 'Registration is full — thanks for your interest!' : 'Registration is not open yet.';
+    app.append(el('div', { class: 'card center hero' }, el('p', { class: 'muted' }, msg)), footer());
     return;
   }
 
@@ -66,19 +68,17 @@ function render(tournament) {
   const out = el('div', {});
   const btn = el('button', { class: 'btn', onclick: async () => {
     btn.disabled = true;
-    const captain = await generateKeypair();
-    const fp = await fingerprint(captain.publicKey); // 4-char team code
-    const payload = JSON.stringify({ v: 1, captainPublicKey: captain.publicKey, ts: new Date().toISOString() });
-    const sealed = await seal(payload, tournament.organizerPublicKey);
-    keyStore.save(tournament.name, { ...captain, fingerprint: fp, teamName: fp });
+    const token = randomToken();
+    const fp = await fingerprint(token); // 4-char team code
+    identityStore.save(tournament.name, { fp, token });
     clear(app);
     app.append(out, footer());
-    renderSubmission(out, tournament, { sealed, fp, captain });
+    renderSubmission(out, tournament, { fp, token });
   } }, 'Create my anonymous team');
 
   app.append(
     el('div', { class: 'card center hero' },
-      el('p', { class: 'lead' }, 'Join the tournament — anonymous, encrypted, no account.'),
+      el('p', { class: 'lead' }, 'Join the tournament — anonymous, no account.'),
       btn,
     ),
     out,

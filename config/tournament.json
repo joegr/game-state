@@ -3,15 +3,17 @@
   "name": "The Autumn Gauntlet",
   "tagline": "simple state-based tournaments",
   "teamCount": 32,
+  "groupSize": 4,
   "format": "single-elimination",
-  "organizerPublicKey": "",
+  "appRepo": "joegr/game-state",
+  "rosterRepo": "joegr/game-state-roster",
   "activePhase": "signup",
   "phases": [
     {
       "id": "signup",
       "kind": "signup",
       "label": "Registration",
-      "blurb": "Captains register their team. Entries are anonymous and encrypted."
+      "blurb": "Captains register their team. Entries are anonymous."
     },
     {
       "id": "groups",

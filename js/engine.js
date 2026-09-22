@@ -1,6 +1,6 @@
 // game-state — the pure tournament engine.
 //
-// No DOM, no filesystem, no network, no crypto: just the state transitions of a
+// No DOM, no filesystem, no network, no I/O: just the state transitions of a
 // single-elimination bracket and the two-captain score consensus. Shared by the
 // browser admin console (js/admin.js) and the Node CLI (tools/advance.mjs) so
 // there is exactly ONE implementation of the rules.
@@ -151,7 +151,7 @@ export function playableMatches(state) {
   return out;
 }
 
-// Compute the result queue from already-decrypted, already-identified reports.
+// Compute the result queue from already-verified, already-identified reports.
 // Each report: { reporterFp, matchId, myScore, oppScore, ts }. A match is
 // `agreed` only when both captains reported mirrored, non-tied scores.
 export function computeQueue(state, reports) {
@@ -182,6 +182,101 @@ export function computeQueue(state, reports) {
   return queue;
 }
 
+// ---- roster (config/roster.md) ----------------------------------------------
+//
+// The confirmed roster is a committed markdown table: `fp` (team code) and
+// `tokenHash` (never the raw token) per team, plus when they were added. It's
+// the roster's own git history that makes it auditable — a plain table, not a
+// blob, so a diff of who joined when is just a diff.
+
+export function formatRosterMd(teams) {
+  const header = '| Code | Token hash | Registered |\n|------|------------|------------|';
+  const rows = teams.map((t) => `| ${t.fp} | ${t.tokenHash} | ${t.registeredAt || ''} |`).join('\n');
+  return '# Roster\n\n'
+    + '_Confirmed teams. `tokenHash` proves a captain\'s identity for score reports — never publish the raw token._\n\n'
+    + header + (rows ? '\n' + rows : '') + '\n';
+}
+
+export function parseRosterMd(md) {
+  const lines = md.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('|'));
+  return lines.slice(2) // header + separator
+    .map((line) => {
+      const cells = line.split('|').slice(1, -1).map((c) => c.trim());
+      const [fp, tokenHash, registeredAt] = cells;
+      return fp ? { fp, tokenHash, registeredAt: registeredAt || null } : null;
+    })
+    .filter(Boolean);
+}
+
+// ---- results ledger (results.md, in the roster repo) ------------------------
+//
+// Once a match is double-verified (both captains' reports agree) and the
+// organizer confirms it, the result is posted here — an append-only public
+// record, independent of config/queue.json's working state.
+
+export function formatResultsMd(results) {
+  const header = '| Match | Winner | Score | Confirmed |\n|-------|--------|-------|-----------|';
+  const rows = results.map((r) => `| ${r.matchId} | ${r.winner} | ${r.scoreWinner}-${r.scoreLoser} | ${r.confirmedAt} |`).join('\n');
+  return '# Results\n\n_Confirmed match results, most recent last. Append-only._\n\n'
+    + header + (rows ? '\n' + rows : '') + '\n';
+}
+
+export function parseResultsMd(md) {
+  const lines = md.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('|'));
+  return lines.slice(2)
+    .map((line) => {
+      const cells = line.split('|').slice(1, -1).map((c) => c.trim());
+      const [matchId, winner, score, confirmedAt] = cells;
+      if (!matchId) return null;
+      const [scoreWinner, scoreLoser] = (score || '').split('-').map(Number);
+      return { matchId, winner, scoreWinner, scoreLoser, confirmedAt: confirmedAt || null };
+    })
+    .filter(Boolean);
+}
+
+// ---- signup capacity (pre-draw groups) --------------------------------------
+//
+// Registration is anonymous and captains never pick a group — the confirmed
+// roster fills sequentially, in the order the organizer accepts entries,
+// `groupSize` at a time. Whether signups are still open is a fact about
+// capacity, not a clock: once every group has its full complement, the field
+// is closed. This has nothing to do with `activePhase` — that's the
+// organizer's explicit switch; this is what's true about the roster right now.
+
+export function buildGroups(teamFps, teamCount, groupSize) {
+  const groupCount = Math.max(1, Math.ceil(teamCount / groupSize));
+  return Array.from({ length: groupCount }, (_, i) => {
+    const slots = Math.min(groupSize, teamCount - i * groupSize);
+    const teams = teamFps.slice(i * groupSize, i * groupSize + slots);
+    return { index: i, teams, slots, full: teams.length >= slots };
+  });
+}
+
+export function signupProgress(teamFps, teamCount, groupSize) {
+  const groups = buildGroups(teamFps, teamCount, groupSize);
+  return {
+    registered: teamFps.length,
+    capacity: teamCount,
+    full: teamFps.length >= teamCount,
+    groups: groups.map(({ index, teams, slots, full }) => ({ index, filled: teams.length, slots, full })),
+  };
+}
+
+// The pre-draw counterpart to buildPublic() — same file (config/public.json),
+// published any time the organizer wants to show current signup progress.
+export function buildSignupProgress(teamFps, tournamentName, teamCount, groupSize) {
+  const progress = signupProgress(teamFps, teamCount, groupSize);
+  return {
+    schemaVersion: 1, generatedAt: new Date().toISOString(),
+    tournament: tournamentName, status: 'registration',
+    ...progress,
+    rounds: [],
+    note: progress.full
+      ? 'Registration is full. Waiting for the organizer to run the draw.'
+      : `Registration is open — ${progress.registered}/${progress.capacity} confirmed.`,
+  };
+}
+
 // ---- published outputs ------------------------------------------------------
 
 export function buildPublic(state, tournamentName, teamCount) {
@@ -201,8 +296,8 @@ export function buildPublic(state, tournamentName, teamCount) {
   };
 }
 
-// Per-captain PLAINTEXT views keyed by fp; the caller seals each to the
-// captain's public key. Mirrors the captain's-eye perspective.
+// Per-team views keyed by team code — the captain's-eye perspective of a
+// bracket that is already public.
 export function buildViews(state, teamFps) {
   const nextFixture = new Map();
   const eliminated = new Set();

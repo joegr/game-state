@@ -1,18 +1,18 @@
-// game-state — captain.html app: anonymous encrypted Sign-up + the private
-// Captain view. The public tournament/status view lives on the landing page
-// (index.html / js/tournament.js); this page is the personal, key-holding side.
+// game-state — captain.html app: anonymous Sign-up + the Captain view. The
+// public tournament/status view lives on the landing page (index.html /
+// js/tournament.js); this page is the one that holds a team's own token.
 
-import { loadTournament, loadBracket } from './config.js';
+import { loadTournament, loadBracket, loadPublic } from './config.js';
 import { el, clear } from './util.js';
 import { renderSignup } from './signup.js';
 import { renderCaptain } from './captain.js';
 
 const app = document.getElementById('app');
-let tournament, bracket;
+let tournament, bracket, pub;
 
 async function boot() {
   try {
-    [tournament, bracket] = await Promise.all([loadTournament(), loadBracket()]);
+    [tournament, bracket, pub] = await Promise.all([loadTournament(), loadBracket(), loadPublic()]);
   } catch (err) {
     app.append(el('div', { class: 'card danger' }, el('h2', {}, 'Config error'), el('p', {}, String(err.message))));
     return;
@@ -39,7 +39,7 @@ function route() {
   app.append(view);
   const hash = location.hash || '#/signup';
   if (hash.startsWith('#/captain')) renderCaptain(view, tournament, bracket);
-  else renderSignup(view, tournament);
+  else renderSignup(view, tournament, pub);
 }
 
 boot();

@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Organizer-side CLI for game-state: generate keys, decrypt signups, advance the bracket.",
+  "description": "Organizer-side CLI for game-state: advance the bracket, publish stages and results through gh.",
   "engines": { "node": ">=20" },
   "scripts": {
-    "keygen": "node keygen.mjs",
-    "decrypt": "node decrypt-signups.mjs",
-    "advance": "node advance.mjs"
+    "advance": "node advance.mjs",
+    "roster": "node make-fake-roster.mjs",
+    "scores": "node make-fake-scores.mjs"
   }
 }

@@ -18,3 +18,11 @@ export async function loadBracket() {
     return { activePhase: 'signup', views: {} };
   }
 }
+
+export async function loadPublic() {
+  try {
+    return await loadJson(new URL('config/public.json', document.baseURI).href);
+  } catch {
+    return { rounds: [], status: 'registration' };
+  }
+}

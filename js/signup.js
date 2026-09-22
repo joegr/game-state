@@ -1,39 +1,41 @@
-// game-state — anonymous encrypted signup.
+// game-state — anonymous signup.
 //
-// Everything here happens in the browser. The captain's identity is a freshly
-// generated keypair that never leaves their device except as a public key inside
-// an encrypted-to-the-organizer blob. The organizer learns the team name only
-// after decrypting with their private key; the public site never sees it.
+// A captain's identity is a random token generated on their device. The
+// published roster carries only its hash, so a captain who kept their token is
+// the only one who can later report a score as that team.
 
-import { el, clear, keyStore, copy } from './util.js';
-import { generateKeypair, seal, fingerprint } from './crypto.js';
+import { el, clear, identityStore, copy } from './util.js';
+import { randomToken, fingerprint } from './identity.js';
+import { isSignupOpen } from './stateMachine.js';
 
-export async function renderSignup(root, tournament) {
+export async function renderSignup(root, tournament, pub) {
   clear(root);
 
-  if (!tournament.organizerPublicKey) {
-    root.append(el('div', { class: 'card' },
-      el('h2', {}, 'Registration not open yet'),
-      el('p', { class: 'muted' }, 'The organizer has not published a signup key for this tournament. Check back soon.'),
-    ));
-    return;
-  }
-
-  const existing = keyStore.load(tournament.name);
+  const existing = identityStore.load(tournament.name);
 
   if (existing) {
     root.append(el('div', { class: 'card' },
       el('h2', {}, 'You are registered'),
-      el('p', { class: 'muted' }, 'Your captain key is stored on this device. Use the Captain view to track your run.'),
-      el('p', {}, el('code', { class: 'mono' }, existing.fingerprint)),
-      el('button', { class: 'btn ghost', onclick: () => { if (confirm('Forget this captain key? You cannot recover it.')) { keyStore.clear(tournament.name); renderSignup(root, tournament); } } }, 'Forget key on this device'),
+      el('p', { class: 'muted' }, 'Your token is stored on this device. Use the Captain view to track your run.'),
+      el('p', {}, el('code', { class: 'mono' }, existing.fp)),
+      el('button', { class: 'btn ghost', onclick: () => { if (confirm('Forget this token? You cannot recover it.')) { identityStore.clear(tournament.name); renderSignup(root, tournament, pub); } } }, 'Forget token on this device'),
+    ));
+    return;
+  }
+
+  if (!isSignupOpen(tournament, pub)) {
+    root.append(el('div', { class: 'card' },
+      el('h2', {}, pub?.full ? 'Registration is full' : 'Registration is not open yet'),
+      el('p', { class: 'muted' }, pub?.full
+        ? 'Every group has its full complement of teams — thanks for your interest!'
+        : 'The organizer hasn\'t opened signups yet. Check back soon.'),
     ));
     return;
   }
 
   const form = el('form', { class: 'card' },
     el('h2', {}, 'Register your team'),
-    el('p', { class: 'muted' }, 'No name to pick, no account, no email. We generate a private captain key on your device and assign your team a random four-character code — that anonymous code is your team throughout the tournament.'),
+    el('p', { class: 'muted' }, 'No name to pick, no account, no email. We generate a random token on your device and assign your team a random four-character code — that anonymous code is your team throughout the tournament.'),
     el('button', { type: 'submit', class: 'btn' }, 'Create my anonymous team'),
   );
   const out = el('div', { class: 'signup-out' });
@@ -43,36 +45,33 @@ export async function renderSignup(root, tournament) {
     e.preventDefault();
     form.querySelector('button').disabled = true;
 
-    const captain = await generateKeypair();
-    const fp = await fingerprint(captain.publicKey); // the 4-char team code
-    const payload = JSON.stringify({
-      v: 1, captainPublicKey: captain.publicKey, ts: new Date().toISOString(),
-    });
-    const sealed = await seal(payload, tournament.organizerPublicKey);
+    const token = randomToken();
+    const fp = await fingerprint(token); // the 4-char team code
 
-    keyStore.save(tournament.name, { ...captain, fingerprint: fp, teamName: fp });
+    identityStore.save(tournament.name, { fp, token });
 
-    renderSubmission(out, tournament, { sealed, fp, captain });
+    renderSubmission(out, tournament, { fp, token });
   });
 }
 
-export function renderSubmission(out, tournament, { sealed, fp, captain }) {
+export function renderSubmission(out, tournament, { fp, token }) {
   clear(out);
-  const backup = JSON.stringify({ tournament: tournament.name, ...captain, fingerprint: fp }, null, 2);
+  const backup = JSON.stringify({ tournament: tournament.name, fp, token }, null, 2);
   const dl = URL.createObjectURL(new Blob([backup], { type: 'application/json' }));
+  const entry = `${fp}:${token}`;
 
   out.append(el('div', { class: 'card success' },
-    el('h3', {}, 'Entry sealed ✓'),
+    el('h3', {}, 'Registered ✓'),
     el('p', {}, 'Your team code: ', el('code', { class: 'mono big' }, fp)),
-    el('p', { class: 'warn' }, '⚠ Save your captain key now. It is the ONLY way to view your progress and it cannot be recovered.'),
+    el('p', { class: 'warn' }, '⚠ Save your token now. It is the ONLY way to prove you are this team, and it cannot be recovered.'),
     el('div', { class: 'row' },
-      el('a', { class: 'btn', href: dl, download: `game-state-${fp}.key.json` }, 'Download captain key'),
-      el('button', { class: 'btn ghost', onclick: async (e) => { e.target.textContent = (await copy(backup)) ? 'Copied ✓' : 'Copy failed'; } }, 'Copy key'),
+      el('a', { class: 'btn', href: dl, download: `game-state-${fp}.token.json` }, 'Download token'),
+      el('button', { class: 'btn ghost', onclick: async (e) => { e.target.textContent = (await copy(backup)) ? 'Copied ✓' : 'Copy failed'; } }, 'Copy token'),
     ),
     el('hr', {}),
     el('h4', {}, 'Submit your entry'),
-    el('p', { class: 'muted' }, 'Send this sealed entry to the organizer through your tournament channel. Only they can open it.'),
-    el('pre', { class: 'blob' }, sealed),
-    el('button', { class: 'btn', onclick: async (e) => { e.target.textContent = (await copy(sealed)) ? 'Copied ✓' : 'Copy failed'; } }, 'Copy sealed entry'),
+    el('p', { class: 'muted' }, 'Send your team code and token to the organizer through your tournament channel (Discord, chat, email). This repo is public, so send it privately — anyone who has your token can act as your team.'),
+    el('pre', { class: 'blob' }, entry),
+    el('button', { class: 'btn', onclick: async (e) => { e.target.textContent = (await copy(entry)) ? 'Copied ✓' : 'Copy failed'; } }, 'Copy code + token'),
   ));
 }

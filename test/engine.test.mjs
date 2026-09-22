@@ -3,7 +3,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildDraw, applyResult, simAll, computeQueue, buildPublic, buildViews,
-  playableMatches, currentPhaseLabel,
+  playableMatches, currentPhaseLabel, buildGroups, signupProgress, buildSignupProgress,
+  formatRosterMd, parseRosterMd, formatResultsMd, parseResultsMd,
 } from '../js/engine.js';
 
 const teams = (n) => Array.from({ length: n }, (_, i) => `T${String(i).padStart(2, '0')}`);
@@ -147,5 +148,77 @@ test('buildViews: champion / eliminated / scheduled perspectives', () => {
   assert.equal(views[champ].status, 'champion');
   const losers = teams(4).filter((t) => t !== champ);
   assert.ok(losers.some((t) => views[t].status === 'eliminated'));
+});
+
+// ---- signup capacity ---------------------------------------------------------
+
+test('buildGroups: fills sequentially, groupSize at a time', () => {
+  const groups = buildGroups(teams(6), 8, 4);
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups[0].teams, teams(6).slice(0, 4));
+  assert.equal(groups[0].full, true);
+  assert.deepEqual(groups[1].teams, teams(6).slice(4, 6));
+  assert.equal(groups[1].slots, 4);
+  assert.equal(groups[1].full, false);
+});
+
+test('buildGroups: an uneven capacity gives the tail group fewer slots', () => {
+  const groups = buildGroups(teams(2), 10, 4);
+  assert.equal(groups.length, 3);
+  assert.deepEqual(groups.map((g) => g.slots), [4, 4, 2]);
+  assert.equal(groups[2].full, false);
+});
+
+test('signupProgress: registered/capacity/full track the roster against capacity', () => {
+  let p = signupProgress(teams(6), 8, 4);
+  assert.equal(p.registered, 6);
+  assert.equal(p.capacity, 8);
+  assert.equal(p.full, false);
+  p = signupProgress(teams(8), 8, 4);
+  assert.equal(p.full, true);
+  assert.ok(p.groups.every((g) => g.full));
+});
+
+test('buildSignupProgress: publishable pre-draw shape', () => {
+  const obj = buildSignupProgress(teams(4), 'Cup', 8, 4);
+  assert.equal(obj.status, 'registration');
+  assert.equal(obj.registered, 4);
+  assert.equal(obj.full, false);
+  assert.deepEqual(obj.rounds, []);
+  assert.match(obj.note, /4\/8/);
+});
+
+// ---- roster markdown ---------------------------------------------------------
+
+test('formatRosterMd / parseRosterMd round-trip the roster', () => {
+  const roster = [
+    { fp: 'AB12', tokenHash: 'hash1', registeredAt: '2026-01-01T00:00:00Z' },
+    { fp: 'CD34', tokenHash: 'hash2', registeredAt: '2026-01-02T00:00:00Z' },
+  ];
+  const md = formatRosterMd(roster);
+  assert.match(md, /# Roster/);
+  assert.match(md, /AB12/);
+  assert.deepEqual(parseRosterMd(md), roster);
+});
+
+test('formatRosterMd: an empty roster still parses back to an empty list', () => {
+  assert.deepEqual(parseRosterMd(formatRosterMd([])), []);
+});
+
+// ---- results ledger -----------------------------------------------------------
+
+test('formatResultsMd / parseResultsMd round-trip confirmed results', () => {
+  const results = [
+    { matchId: 'r8-m1', winner: 'AB12', scoreWinner: 2, scoreLoser: 1, confirmedAt: '2026-01-01T00:00:00Z' },
+    { matchId: 'r8-m2', winner: 'CD34', scoreWinner: 3, scoreLoser: 0, confirmedAt: '2026-01-02T00:00:00Z' },
+  ];
+  const md = formatResultsMd(results);
+  assert.match(md, /# Results/);
+  assert.match(md, /r8-m1/);
+  assert.deepEqual(parseResultsMd(md), results);
+});
+
+test('formatResultsMd: an empty ledger still parses back to an empty list', () => {
+  assert.deepEqual(parseResultsMd(formatResultsMd([])), []);
 });
 

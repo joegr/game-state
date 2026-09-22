@@ -5,19 +5,12 @@
 // begin. Everything here is public and anonymous — the private "captain
 // perspective" lives on captain.html.
 
-import { loadTournament } from './config.js';
+import { loadTournament, loadPublic } from './config.js';
 import { currentPhase, isSignupOpen } from './stateMachine.js';
 import { el, clear } from './util.js';
 
 const app = document.getElementById('app');
 let tournament, pub;
-
-async function loadPublic() {
-  try {
-    const res = await fetch(new URL('config/public.json', document.baseURI).href, { cache: 'no-cache' });
-    return await res.json();
-  } catch { return { rounds: [], status: 'registration' }; }
-}
 
 async function boot() {
   try {
@@ -58,7 +51,7 @@ function render() {
     drawn && !complete
       ? el('p', { class: 'muted sm' }, `${pub.teamCount || 0} teams · ${pub.matchesDecided}/${pub.matchesTotal} matches decided`)
       : null,
-    isSignupOpen(tournament)
+    isSignupOpen(tournament, pub)
       ? el('a', { class: 'btn', href: 'index.html' }, 'Register your team →')
       : null,
   ));
@@ -110,6 +103,21 @@ function renderRoadmap() {
         ),
       );
     })),
+  ));
+
+  if (cur?.kind === 'signup' && Array.isArray(pub.groups)) renderSignupProgress();
+}
+
+// Signups fill sequentially, groupSize at a time — no captain picks a group.
+// Registration closes on capacity (every group full), not on a clock, so this
+// is the thing that actually determines whether "Register your team" shows.
+function renderSignupProgress() {
+  app.append(el('div', { class: 'card' },
+    el('h3', {}, 'Signups'),
+    el('p', { class: 'muted sm' }, `${pub.registered}/${pub.capacity} confirmed`,
+      pub.full ? ' — field is full.' : '.'),
+    el('div', { class: 'row' }, pub.groups.map((g) =>
+      el('span', { class: 'badge ' + (g.full ? 'good' : 'upcoming') }, `Group ${g.index + 1}: ${g.filled}/${g.slots}`))),
   ));
 }
 

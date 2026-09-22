@@ -2,14 +2,20 @@
   "schemaVersion": 1,
   "generatedAt": null,
   "tournament": "The Autumn Gauntlet",
-  "seed": null,
-  "format": "single-elimination",
   "status": "registration",
-  "activePhase": "signup",
-  "teamCount": 0,
-  "champion": null,
-  "matchesDecided": 0,
-  "matchesTotal": 0,
+  "registered": 0,
+  "capacity": 32,
+  "full": false,
+  "groups": [
+    { "index": 0, "filled": 0, "slots": 4, "full": false },
+    { "index": 1, "filled": 0, "slots": 4, "full": false },
+    { "index": 2, "filled": 0, "slots": 4, "full": false },
+    { "index": 3, "filled": 0, "slots": 4, "full": false },
+    { "index": 4, "filled": 0, "slots": 4, "full": false },
+    { "index": 5, "filled": 0, "slots": 4, "full": false },
+    { "index": 6, "filled": 0, "slots": 4, "full": false },
+    { "index": 7, "filled": 0, "slots": 4, "full": false }
+  ],
   "rounds": [],
   "note": "The draw has not happened yet. This anonymized bracket fills in once registration closes, and updates as each match closes."
 }
