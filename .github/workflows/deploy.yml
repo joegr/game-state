@@ -20,7 +20,7 @@ on:
       - 'index.html'
       - 'bracket.html'
       - 'captain.html'
-      - 'admin.html'
+      - 'report.html'
       - '404.html'
       - 'css/**'
       - 'js/**'

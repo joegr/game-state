@@ -88,35 +88,48 @@ Feature: Organizer authority
       # There is no clock read anywhere in this path, so skew cannot produce a
       # different answer for different visitors.
 
-  Rule: The organizer's own screen is a status view, not a console
+  Rule: The organizer's panel hands out commands, it does not run them
 
-    admin.html shows the organizer the same public data as everyone else, plus
-    a dry-run inbox and the exact commands to run next. It cannot write.
+    The organizer gets the ordinary registration page like everyone else, plus
+    a modal on devices where they have set a PIN. The modal shows the live
+    tournament and, beside every action, the exact command that performs it.
+    It never performs one itself — a web page has no push access, and that is
+    the whole authorization model rather than a gap in it.
 
-    Scenario: The organizer sees what to do next
-      When the organizer opens admin.html
-      Then they see the live phase, the confirmed roster count and the bracket
-      And a list of the exact `advance.mjs` commands appropriate to that state
+    @critical
+    Scenario: Every action is a command to copy
+      Given the organizer opens the panel
+      Then each action — advance the stage, run the draw, publish a result,
+        tally reports — is shown as a copyable `advance.mjs` command
+      And the panel states plainly that it cannot write to the repos
+      And running the command needs a terminal with `gh` authenticated
+
+    Scenario: The panel reflects the live state
+      When the organizer opens it
+      Then they see the current phase, the confirmed roster count and,
+        once drawn, the bracket and its seed
+      And the commands offered are the ones appropriate to that state
+      And a pre-draw tournament offers the draw; a drawn one does not
 
     @dry-run
-    Scenario: Pasting blobs into the browser changes nothing
+    Scenario: Pasting blobs into the panel changes nothing
       When the organizer pastes signup entries and score reports into the inbox
       Then each is classified and checked against the live roster
-      And the result of that check is displayed
+      And matches whose two reports agree show the command that would publish them
       And nothing is stored, published or remembered
       # To actually publish, the same text goes through `advance.mjs ingest`.
 
     @not-a-credential
     Scenario: The PIN is a view toggle, not a security boundary
       Given the organizer has set a PIN on this device
-      Then it only switches this browser to the organizer-flavored view
-      And it protects nothing, because there is nothing sensitive behind it
+      Then it only reveals this panel in this browser
+      And it protects nothing, because everything the panel shows is public
       And the interface says so in as many words
 
     @durability
     Scenario: Losing the browser loses nothing
       Given the organizer clears site data, or switches to another machine
-      When they open admin.html again
+      When they open the panel again
       Then the full tournament is still there, refetched from the two repos
       And the only thing lost is unpublished score reports on the old machine
       # There is no backup to take. The record is git history; durability is

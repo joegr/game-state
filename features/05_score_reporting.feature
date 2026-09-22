@@ -15,34 +15,65 @@ Feature: Score reporting and confirmation
 
   Background:
     Given a bracket has been drawn
-    And both captains of a match know their own token
+    And both captains of a match hold their own score report key
 
-  Rule: A captain reports only their own match
+  Rule: The reporting page offers only matches that are actually open
 
-    @smoke
+    The bound is exact: both sides known, no winner recorded, and this team is
+    one of the two. Everything outside it is explained, not silently hidden.
+
+    @smoke @critical
     Scenario: Reporting a score
-      Given a captain's match has both sides known
+      Given a captain pastes their key on the reporting page
+      Then the key is checked against the hash published in roster.md
+      And they are shown only their own open match
       When they enter their score and their opponent's
       Then they get a blob to send the organizer
-      And it carries their code, their token, the match id and both scores
+      And it carries their code, their key, the match id and both scores
 
-    Scenario: A report for a match that is not yet playable is ignored
+    @critical
+    Scenario Outline: Having nothing to report is always explained
+      Given a captain whose situation is "<situation>"
+      When they open the reporting page
+      Then no match is offered
+      And they are told "<because>"
+
+      Examples:
+        | situation                | because                             |
+        | entry not ingested yet   | you are not on the published roster |
+        | the draw has not run     | there are no matches yet            |
+        | opponent still undecided | waiting on your opponent            |
+        | eliminated               | your run is over                    |
+        | tournament complete      | no further results can be reported  |
+
+    Scenario: A decided match stops being reportable immediately
+      Given a match has a confirmed winner
+      Then neither captain is offered it again
+
+    Scenario: A match with one side filled is not offered
       Given a second-round match has only one side filled
-      Then it is not offered for reporting
+      Then it is not offered to the team already in it
       And no consensus is computed for it
 
-    @auth
-    Scenario: A report with the wrong token is rejected
-      Given a report claims a team code whose token does not match the roster
-      When it is ingested
-      Then it is counted as unauthenticated and discarded
-      And it never reaches the consensus queue
+    @auth @critical
+    Scenario: A key that does not match the roster is refused at the page
+      Given a pasted key whose token does not hash to the published entry
+      Then the captain is told so, and no match is offered
+      # Caught here, rather than by the organizer an hour later.
 
-    @auth
-    Scenario: A captain cannot report for another team
-      Given a captain holds only their own token
-      Then they cannot produce a report that passes the check for another code
+    @auth @critical
+    Scenario: A captain cannot report as another team
+      Given someone pastes a key carrying another team's code
+      Then the code is re-derived from the token, not taken from the text
+      And they are offered their own matches, never the other team's
+      And a forged report is discarded on ingest as unauthenticated
       # Their word counts for exactly one side of one result.
+
+    @privacy
+    Scenario: The page submits nothing anywhere
+      When a captain creates a report
+      Then the key never leaves their device
+      And the report is a blob for them to send through their own channel
 
   Rule: Agreement is computed, never negotiated
 

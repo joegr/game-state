@@ -1,21 +1,23 @@
-// game-state — captain.html app: anonymous Sign-up + the Captain view. The
-// public tournament/status view lives on the landing page (index.html /
-// js/tournament.js); this page is the one that holds a team's own token.
+// game-state — captain.html: a team's own view of the bracket.
+//
+// Registration lives on index.html and score reporting on report.html; this
+// page is just "where do I stand". All three read the same public markdown and
+// reconstruct the same state — see js/config.js.
 
 import { loadTournament, loadTournamentState } from './config.js';
 import { buildViews } from './engine.js';
 import { el, clear } from './util.js';
-import { renderSignup } from './signup.js';
 import { renderCaptain } from './captain.js';
 
 const app = document.getElementById('app');
-let tournament, progress, views, drawn;
+
+boot();
 
 async function boot() {
+  let tournament, views, drawn;
   try {
     tournament = await loadTournament();
-    const { roster, progress: prog, state } = await loadTournamentState(tournament);
-    progress = prog;
+    const { roster, state } = await loadTournamentState(tournament);
     drawn = !!state;
     views = state ? buildViews(state, roster.map((t) => t.fp)) : {};
   } catch (err) {
@@ -24,27 +26,18 @@ async function boot() {
   }
   document.getElementById('tourney-name').textContent = tournament.name;
   document.title = `${tournament.name} · captain · game-state`;
-  window.addEventListener('hashchange', route);
-  route();
-}
 
-function nav() {
-  const routes = [['#/signup', 'Sign up'], ['#/captain', 'Captain view']];
-  const here = location.hash || '#/signup';
-  return el('nav', { class: 'tabs' },
-    el('a', { href: 'bracket.html', class: 'tab' }, '← Bracket'),
-    routes.map(([href, label]) =>
-      el('a', { href, class: 'tab' + (here.startsWith(href) ? ' active' : '') }, label)));
-}
-
-function route() {
   clear(app);
   app.append(nav());
   const view = el('div', { class: 'view' });
   app.append(view);
-  const hash = location.hash || '#/signup';
-  if (hash.startsWith('#/captain')) renderCaptain(view, tournament, { drawn, views });
-  else renderSignup(view, tournament, progress);
+  renderCaptain(view, tournament, { drawn, views });
 }
 
-boot();
+function nav() {
+  return el('nav', { class: 'tabs' },
+    el('a', { href: 'index.html', class: 'tab' }, '← Register'),
+    el('a', { href: 'bracket.html', class: 'tab' }, 'Public bracket'),
+    el('span', { class: 'tab active' }, 'Captain view'),
+    el('a', { href: 'report.html', class: 'tab' }, 'Report a score'));
+}

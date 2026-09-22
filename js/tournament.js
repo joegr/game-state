@@ -66,12 +66,14 @@ function render() {
 
   app.append(el('p', { class: 'muted sm center' },
     'Anonymized public bracket · registered captains track their own fixtures in the ',
-    el('a', { href: 'captain.html#/captain' }, 'Captain view'), '.'));
+    el('a', { href: 'captain.html' }, 'Captain view'), '.'));
 }
 
 function renderBracket() {
   const pct = pub.matchesTotal ? Math.round((pub.matchesDecided / pub.matchesTotal) * 100) : 0;
-  app.append(
+  // .filter(Boolean): native Node.append renders a null child as the text
+  // "null", unlike the el() helper, which skips it.
+  app.append(...[
     pub.seed ? el('p', { class: 'muted sm' }, 'Draw seed ', el('code', { class: 'mono' }, pub.seed), ' — a reproducible, seeded random draw.') : null,
     pub.matchesTotal ? el('div', { class: 'progress' }, el('div', { class: 'bar', style: `width:${pct}%` })) : null,
     el('div', { class: 'bracket' }, pub.rounds.map((round) =>
@@ -85,7 +87,8 @@ function renderBracket() {
             teamChip(m.b, { winner: decided && m.winner === m.b, dim: decided && m.winner !== m.b && m.b }),
           );
         }),
-      ))));
+      ))),
+  ].filter(Boolean));
 }
 
 // Before the draw: an ordered list of stages relative to the current one — no

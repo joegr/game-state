@@ -92,3 +92,58 @@ code.mono { background: var(--bg); padding: 2px 6px; border-radius: 6px; border:
 .team .check { color: var(--good); }
 
 .foot { color: var(--muted); font-size: 12px; text-align: center; padding: 30px 18px 40px; }
+
+/* registration: two generated fields */
+.field { margin: 4px 0 2px; }
+.field-label { display: block; font-weight: 650; font-size: 14px; margin-bottom: 2px; }
+.field .input[readonly] { background: var(--bg); color: var(--ink); cursor: default; }
+.input.mono.big { font-size: 22px; letter-spacing: .16em; text-align: center; font-weight: 700; }
+.good-text { color: var(--good); }
+hr { border: none; border-top: 1px solid var(--line); margin: 18px 0; }
+
+/* organizer control bar */
+.organizer-trigger {
+  position: fixed; right: 14px; bottom: 14px; z-index: 40;
+  background: var(--panel); color: var(--muted); border: 1px solid var(--line);
+  border-radius: 999px; padding: 7px 14px; font: inherit; font-size: 12px;
+  font-weight: 650; cursor: pointer; box-shadow: var(--shadow); opacity: .75;
+  transition: right .28s ease, opacity .2s;
+}
+.organizer-trigger:hover { opacity: 1; color: var(--ink); }
+
+.org-bar {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 50;
+  width: min(420px, 100vw);
+  background: var(--panel); border-left: 1px solid var(--line);
+  box-shadow: -8px 0 28px rgba(0,0,0,.18);
+  padding: 16px 18px 28px; overflow-y: auto; overscroll-behavior: contain;
+  transform: translateX(100%); transition: transform .28s ease;
+}
+.org-bar.open { transform: translateX(0); }
+.org-bar-head {
+  position: sticky; top: -16px; z-index: 1;
+  background: var(--panel); margin: -16px 0 10px; padding: 16px 0 8px;
+  border-bottom: 1px solid var(--line);
+}
+.org-bar-head h2 { margin: 0; font-size: 20px; }
+.org-bar-body .card { margin-bottom: 12px; padding: 14px 15px; background: var(--bg); }
+.org-bar-body h3 { font-size: 15px; }
+.org-bar details summary { cursor: pointer; margin: 8px 0; }
+
+/* The page keeps its own width; on a wide screen, make room for the bar. */
+@media (min-width: 1100px) {
+  body.org-bar-open main,
+  body.org-bar-open .topbar,
+  body.org-bar-open .foot { margin-right: 440px; transition: margin-right .28s ease; }
+  body.org-bar-open .organizer-trigger { right: 434px; }
+}
+
+.banner { border-left: 3px solid var(--warn); padding-left: 10px; margin: 0 0 14px; }
+.cmd { margin: 10px 0; }
+.cmd .row { margin: 4px 0 0; flex-wrap: nowrap; align-items: stretch; }
+.cmd-text { flex: 1; margin: 0; overflow-x: auto; white-space: pre; word-break: normal; }
+
+@media (max-width: 520px) {
+  .cmd .row { flex-wrap: wrap; }
+  .cmd-text { flex-basis: 100%; }
+}

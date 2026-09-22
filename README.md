@@ -34,11 +34,12 @@ makes them the organizer is push access to those repositories.
 
 ```
 joegr/game-state ─ the app repo (static site, GitHub Pages)
-├─ index.html        dispatcher → organizer's device to admin; everyone else
-│                    gets a one-button anonymous sign-up          (js/home.js)
+├─ index.html        registration: two generated fields — your team code and
+│                    your score report key                        (js/home.js)
 ├─ bracket.html      public bracket + current stage + roadmap (js/tournament.js)
-├─ captain.html      sign up · your fixture · report your score  (js/app.js …)
-├─ admin.html        organizer STATUS view — read-only            (js/admin.js)
+├─ report.html       report a score — key required, only your own open
+│                    matches are offered                        (js/report.js)
+├─ captain.html      where your team stands                       (js/app.js …)
 │
 ├─ config/tournament.md   ★ the organizer-owned spine: name, format, phases,
 │                           Active phase, Draw seed
@@ -46,7 +47,8 @@ joegr/game-state ─ the app repo (static site, GitHub Pages)
    ├─ engine.js      the PURE engine — draw, advance, consensus, markdown
    │                 parse/format. No DOM, no I/O. Runs in the browser AND Node.
    ├─ config.js      loadTournamentState() — the ONE reconstruction every page calls
-   └─ identity.js    random token → hash → four-character code
+   ├─ identity.js    random token → hash → four-character code; key format
+   └─ organizer.js   the organizer modal — a status view that copies commands
 
 joegr/game-state-roster ─ the roster repo (public, data only)
 ├─ roster.md         ★ confirmed teams: code · token hash · registered
@@ -88,8 +90,10 @@ No build step — vanilla ES modules, served as-is.
 
 ## Run a tournament
 
-Everything the organizer does is a command in `tools/`. `admin.html` shows you
-the live state and the exact command to run next, but it cannot change anything.
+Everything the organizer does is a command in `tools/`. The **Organizer** button
+in the corner of the registration page opens a panel showing the live state with
+a copy button beside every command you might need — but it cannot change
+anything, because nothing in a browser can.
 
 ```bash
 node tools/advance.mjs status              # where things stand
@@ -129,10 +133,26 @@ node tools/advance.mjs result r16-m1 88BD 2 1   # publish a confirmed result
 6. **There is nothing to back up.** The record is the commit history of two
    public repos. Lose your laptop and you lose only unconfirmed score reports.
 
-The captain's side (`captain.html`): register → **save your token** and your
-4-char code → later, load your token to see your fixture and report your score,
-which produces a blob you send the organizer. There is no account recovery,
-because there is no account.
+### The captain's side
+
+Registration (`index.html`) is two generated fields and two buttons — nothing is
+typed and nothing is collected:
+
+1. **Your team code** — press the button, get a random four-character code. That
+   is how you appear on the public bracket. It also produces the entry blob to
+   send the organizer; you are not on the roster until they ingest it.
+2. **Your score report key** — press the second button, get `CODE:token`. **Save
+   it.** It is the only thing that proves you are that team, and there is no
+   account recovery, because there is no account.
+
+To report a result, go to `report.html` and paste that key. The page verifies it
+against the published roster, then offers you **only your own matches that are
+actually open** — both sides known, no winner recorded. Anything else (not
+ingested yet, not drawn, waiting on an opponent, eliminated, already decided) is
+named explicitly instead of silently showing nothing. Submitting produces a blob
+you send the organizer; the page itself posts nowhere.
+
+`captain.html` is a read-only "where do I stand" view of the same public data.
 
 ### Propagation
 

@@ -71,3 +71,52 @@ export function encodeBlob(obj) {
 export function decodeBlob(str) {
   return JSON.parse(new TextDecoder().decode(b64urlToBytes(str)));
 }
+
+// A signup entry, as the captain sends it to the organizer. It MUST be one
+// long base64url run, because that is exactly what `advance.mjs ingest` scans
+// for (/[A-Za-z0-9_-]{60,}/) before handing it to classifyPayload — a bare
+// token is too short to be found and would be silently skipped.
+export function signupEntry(token) {
+  return encodeBlob({ v: 1, token });
+}
+
+// ---- the captain's score-report key -----------------------------------------
+//
+// There is only ever ONE secret per team: the token. The "key" is that same
+// token with the team code attached, so the captain can see at a glance which
+// team it belongs to and paste a single string into the reporting page. The
+// code adds no information — it is derived from the token — which is why
+// parseKey re-derives it rather than trusting what was pasted.
+
+export async function formatKey(token) {
+  return `${await generateCode(token)}:${token}`;
+}
+
+// Deliberately liberal about what it accepts: a key, a bare token, a signup
+// blob, or the old JSON download. Returns {fp, token}, or null.
+export async function parseKey(text) {
+  const t = (text || '').trim();
+  if (!t) return null;
+  let token = null;
+
+  const pair = t.match(/^([A-Za-z0-9]{4})\s*[:\-]\s*([A-Za-z0-9_-]{20,})$/);
+  if (pair) {
+    token = pair[2];
+  } else if (/^[A-Za-z0-9_-]{20,}$/.test(t)) {
+    // Could be a bare token or an encoded blob. Try the blob reading first;
+    // a bare token is not valid JSON once decoded, so it falls through.
+    try {
+      const o = decodeBlob(t);
+      if (o && typeof o.token === 'string') token = o.token;
+    } catch { /* not a blob — treat it as the token itself */ }
+    if (!token) token = t;
+  } else {
+    try {
+      const o = JSON.parse(t);
+      if (o && typeof o.token === 'string') token = o.token;
+    } catch { /* not JSON either */ }
+  }
+
+  if (!token) return null;
+  return { fp: await generateCode(token), token };
+}

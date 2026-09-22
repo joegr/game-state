@@ -2,8 +2,8 @@
 //
 // No DOM, no filesystem, no network, no I/O: just the state transitions of a
 // single-elimination bracket and the two-captain score consensus. Shared by the
-// browser admin console (js/admin.js) and the Node CLI (tools/advance.mjs) so
-// there is exactly ONE implementation of the rules.
+// browser (js/organizer.js, js/report.js) and the Node CLI (tools/advance.mjs)
+// so there is exactly ONE implementation of the rules.
 
 // ---- config (tournament.md, the organizer-owned spine) ----------------------
 //
