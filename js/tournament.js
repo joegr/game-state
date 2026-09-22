@@ -2,10 +2,10 @@
 //
 // This is what a visitor to user.github.io/game-state/ sees first: the current
 // stage, a roadmap before the draw, and the anonymized bracket once matches
-// begin. Everything here is reconstructed live from config/tournament.json
+// begin. Everything here is reconstructed live from config/tournament.md
 // (the organizer-owned spine) plus the roster repo's roster.md/results.md —
-// there is no pre-baked snapshot in this repo. The private "captain
-// perspective" lives on captain.html.
+// there is no pre-baked snapshot in this repo. The per-captain view of the
+// same public data lives on captain.html.
 
 import { loadTournament, loadTournamentState } from './config.js';
 import { buildPublic } from './engine.js';

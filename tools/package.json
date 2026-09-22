@@ -6,8 +6,6 @@
   "description": "Organizer-side CLI for game-state: advance the bracket, publish stages and results through gh.",
   "engines": { "node": ">=20" },
   "scripts": {
-    "advance": "node advance.mjs",
-    "roster": "node make-fake-roster.mjs",
-    "scores": "node make-fake-scores.mjs"
+    "advance": "node advance.mjs"
   }
 }

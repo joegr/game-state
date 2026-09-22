@@ -1,7 +1,4 @@
-# Local test artifacts
-tools/fake-captains.json
-tools/fake-roster.md
-state/
+# Pending, unpublished score reports (working state, never part of the record)
 scores/
 
 # Local dev / editor

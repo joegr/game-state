@@ -172,18 +172,6 @@ export function applyResult(state, matchId, winnerFp) {
   return finalize(state, matchId);
 }
 
-export function simAll(state, seed = (state.seed || 'sim') + ':sim') {
-  const rng = seededRng(seed);
-  for (let r = 0; r < state.rounds.length; r++) {
-    state.rounds[r].matches.forEach((m, i) => {
-      if (m.winner || (!m.a && !m.b)) return;
-      m.winner = !m.b ? m.a : !m.a ? m.b : (rng() < 0.5 ? m.a : m.b);
-      feedForward(state, r, i);
-    });
-  }
-  return finalize(state, 'simulated all rounds');
-}
-
 function finalize(state, msg) {
   state.updatedAt = new Date().toISOString();
   const final = state.rounds[state.rounds.length - 1].matches[0];
@@ -344,8 +332,9 @@ export function signupProgress(teamFps, teamCount, groupSize) {
   };
 }
 
-// The pre-draw counterpart to buildPublic() — same file (config/public.json),
-// published any time the organizer wants to show current signup progress.
+// The pre-draw counterpart to buildPublic(): the shape the landing page and
+// the organizer's status view render while the field is still filling.
+// Computed on the fly from the live roster — never stored.
 export function buildSignupProgress(teamFps, tournamentName, teamCount, groupSize) {
   const progress = signupProgress(teamFps, teamCount, groupSize);
   return {

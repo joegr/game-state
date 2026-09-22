@@ -2,9 +2,10 @@
 //
 // `bracket` here is `{ drawn, views }`, reconstructed client-side (see
 // js/app.js + js/config.js) from the roster repo's roster.md/results.md —
-// there is no bracket.json. Views are keyed by team code, and the bracket is
-// public anyway — every code shows up on it eventually. What a captain's token
-// protects is the one action that matters: reporting a score as that team.
+// nothing per-captain is stored anywhere. Views are keyed by team code, and
+// the bracket is public anyway — every code shows up on it eventually. What a
+// captain's token protects is the one action that matters: reporting a score
+// as that team.
 
 import { el, clear, identityStore, copy } from './util.js';
 import { encodeBlob } from './identity.js';

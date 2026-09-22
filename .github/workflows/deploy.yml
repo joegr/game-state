@@ -1,10 +1,19 @@
 name: Deploy game-state to Pages
 
-# Publishes the static site (index.html + js/ + css/ + config/) to GitHub Pages.
-# Everything the visitor needs is static; the "app" is just the config JSON.
+# Publishes the static site (index.html + js/ + css/ + config/) to GitHub
+# Pages. Everything the visitor needs is static; the only durable state in
+# THIS repo is config/tournament.md — no JSON anywhere. `config/**` below is
+# a directory glob, so it already covers tournament.md (and any future file
+# under config/) with no extension-specific listing to keep in sync.
+#
+# The roster repo (roster.md, results.md) is intentionally NOT wired to this
+# workflow: the site fetches that markdown live at runtime (see
+# js/config.js), so a roster/results change needs no redeploy here at all.
 
 on:
-  # Human edits to the site / config.
+  # Human edits to the site / config, made via `git push` or via
+  # `tools/advance.mjs stage|draw` (both publish through `gh`, which is a
+  # push like any other and triggers this the same way).
   push:
     branches: [main]
     paths:
@@ -18,11 +27,6 @@ on:
       - 'config/**'
       - '.nojekyll'
       - '.github/workflows/deploy.yml'
-  # The engine commits config JSON with GITHUB_TOKEN, which does NOT re-trigger
-  # `push` workflows. So redeploy whenever the engine run finishes instead.
-  workflow_run:
-    workflows: ['game-state engine']
-    types: [completed]
   workflow_dispatch:
 
 permissions:

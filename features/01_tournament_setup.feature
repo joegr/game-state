@@ -1,104 +1,84 @@
 @organizer @setup @config
 Feature: Tournament setup
   As an organizer
-  I want to stand up a tournament from static configuration and a single keypair
+  I want to stand up a tournament from two repositories and one markdown file
   So that a whole tournament runs with no server, no database and no accounts
 
-  The organizer private key is the ONLY privileged credential in the system.
-  Everything else — the schedule, the field size, the format — is static JSON
-  that every visitor reads identically. "Deploying" is committing files.
+  There is no application state anywhere except markdown in git. The app repo
+  holds the site and `config/tournament.md` — the organizer-owned spine. The
+  roster repo holds `roster.md` and `results.md`, which are the database of
+  record for who is playing and what happened. "Deploying" is committing a
+  file; "the tournament" is what those files say.
 
   Background:
-    Given a fresh deployment of the platform
-    And the tournament config at "config/tournament.json"
+    Given an app repo containing the static site and config/tournament.md
+    And a public roster repo containing roster.md and results.md
+    And config/tournament.md names both repos
 
-  Rule: A tournament cannot accept entries before it has an organizer key
+  Rule: tournament.md is the whole configuration
 
-    @guard @critical
-    Scenario: Every entry point fails safe when no key is configured
-      Given "organizerPublicKey" is ""
-      When a visitor opens <page>
-      Then they see "<message>"
-      And no control that would produce a sealed entry is offered
+    @smoke
+    Scenario: The spine is one readable file
+      When the organizer opens config/tournament.md
+      Then it contains the name, tagline, team count, group size and format
+      And it names the app repo and the roster repo
+      And it carries the current "Active phase" and the "Draw seed"
+      And it lists the phases in order, as a markdown table
+      And there is no JSON file anywhere in either repository
 
-      Examples:
-        | page                  | message                          |
-        | the landing page      | Registration is not open yet.    |
-        | the captain sign-up   | Registration not open yet        |
-        | the organizer console | Organizer key not configured     |
+    Scenario: The file is meant to be edited by hand
+      Given the organizer edits a field with inconsistent spacing or casing
+      When the site or the CLI parses it
+      Then the value is read correctly
+      # Label matching is case-insensitive and whitespace-tolerant on purpose:
+      # a hand edit through the GitHub web UI must not be able to break the
+      # site over a stray space.
 
-    @guard @critical
-    Scenario: A misconfigured key never silently swallows entries
-      Given "organizerPublicKey" is ""
-      When 20 visitors arrive during what should be registration
-      Then zero sealed entries are produced
-      And no captain is told they are registered
-      # The failure mode being prevented: captains sealing entries to a key
-      # whose private half nobody holds, discovering it only weeks later.
+    Scenario: An unset draw seed reads as "(none)", never as a broken value
+      Given no draw has been run
+      Then "Draw seed" reads "(none)"
+      And the site treats the tournament as pre-draw
+      And registration, not a bracket, is what visitors see
 
-  Rule: The organizer keypair is generated off-platform and split by trust
+  Rule: Some settings lock once people have relied on them
 
-    @crypto
-    Scenario: Generating the organizer keypair
-      When the organizer runs "node tools/keygen.mjs --json"
-      Then a P-256 ECDH keypair is produced
-      And the output contains exactly a "publicKey" and a "privateKey"
-      And neither key is transmitted anywhere
+    The tournament has two irreversible moments. Both exist because changing
+    the input would silently change facts that are already published.
 
-    @crypto
-    Scenario: The public half is published, the private half never is
-      Given the organizer has generated a keypair
-      When they paste the public key into "config/tournament.json"
-      And they commit the repository
-      Then the public key is served to every visitor
-      And the private key appears in no committed file
-      And "organizer.keys.json" is ignored by version control
+    @critical @lock
+    Scenario: The field locks at the draw
+      Given the draw has run and "Draw seed" is set
+      When anyone attempts to add a team to roster.md
+      Then it is refused, and the reason names the draw
+      # The bracket is never stored — it is rebuilt from the roster every time
+      # it is read. One more team means a different bracket underneath results
+      # that are already public.
 
-    @crypto @critical
-    Scenario: A private key that does not match the published public key is rejected
-      Given the tournament publishes organizer public key "KEY_A"
-      When the organizer tries to unlock the console with the private half of "KEY_B"
-      Then the console refuses with "That private key does not match this tournament's organizer public key."
-      And nothing is stored on the device
+    @critical @lock
+    Scenario: The seed locks at the draw
+      Given the draw has run and results have been published
+      When anyone attempts to run the draw again
+      Then it is refused, and the refusal names the results it would orphan
+      And nothing is changed
 
-  Rule: The stage list is declared once, as the tournament's spine
+    @lock
+    Scenario: A draw with nothing published yet can still be redone
+      Given the draw has run but results.md is empty
+      When the organizer re-runs the draw with an explicit force
+      Then the new seed is published and the bracket is redrawn
+      # The only genuinely recoverable case: nobody has relied on it yet.
 
-    @schedule
-    Scenario: A complete phase list
-      Given the config declares the phases
-        | id            | kind     | label            |
-        | signup        | signup   | Registration     |
-        | r16           | knockout | Round of 16      |
-        | quarterfinals | knockout | Quarter-finals   |
-        | semifinals    | knockout | Semi-finals      |
-        | final         | knockout | The Final        |
-        | complete      | complete | Champion Crowned |
-      And an "activePhase" names exactly one of those ids
-      Then the phase list is valid
-      And every visitor derives the same current stage from it
+    @lock
+    Scenario: The results ledger is append-only
+      Given a match has been confirmed
+      Then its row in results.md is never rewritten
+      And a second result for the same match is refused
 
-    @schedule @guard
-    Scenario: activePhase must name a real phase
-      Given "activePhase" names an id absent from "phases"
-      When the organizer deploys without fixing it
-      Then the site falls back to the first declared phase
-      And no visitor sees a broken or blank stage
-      # Guard rail, not a silent trap: `activePhase` is a plain string the
-      # organizer edits by hand, so a typo is possible and must fail safe.
+  Rule: Setup is finished when the site can be read by a stranger
 
-    @schedule @pending
-    Scenario: The config declares no phase the engine cannot run
-      Given the engine implements "single-elimination"
-      When the config declares a phase of kind "group"
-      Then setup validation fails with "no engine implements phase kind: group"
-      # NOT YET IMPLEMENTED — today a group phase is silently absorbed as a
-      # knockout round.
-
-  @smoke
-  Scenario: A minimal tournament is ready to open
-    Given the organizer has set "organizerPublicKey" to a real public key
-    And has set "name", "teamCount" and "format"
-    And has set "activePhase" to "signup"
-    And has enabled static hosting from the default branch
-    When that config is committed and pushed
-    Then registration opens with no further action from anyone
+    Scenario: A visitor arrives before anything has happened
+      Given tournament.md exists and roster.md is empty
+      When a stranger opens the site
+      Then they see the tournament name and the phase roadmap
+      And they are offered registration if the active phase is the signup phase
+      And nothing is broken or blank

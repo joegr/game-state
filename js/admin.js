@@ -2,17 +2,17 @@
 //
 // This is a READ-ONLY mirror of the public site, plus a dry-run Inbox and a
 // cheatsheet of what to run next. It is not a database: markdown IS the
-// database of record (roster.md + results.md, in the roster repo) and
-// config/tournament.json (the activePhase/drawSeed spine, in this repo) — and
-// the only thing that ever writes to either is `tools/advance.mjs`, which
-// only ever writes by calling `gh`. Nothing here persists a working copy of
-// the tournament; every render re-fetches the live state.
+// database of record (roster.md + results.md, in the roster repo, and
+// tournament.md — the activePhase/drawSeed spine — in this repo) — and the
+// only thing that ever writes to any of it is `tools/advance.mjs`, which only
+// ever writes by calling `gh`. Nothing here persists a working copy of the
+// tournament; every render re-fetches the live state.
 //
 // The PIN below is a local device toggle, not a credential — there is
 // nothing sensitive behind it. The real gate on changing anything is who has
 // an authenticated `gh` with push access to the app repo and the roster repo.
 
-import { el, clear, copy } from './util.js';
+import { el, clear } from './util.js';
 import { hashToken, generateCode, decodeBlob } from './identity.js';
 import {
   currentPhaseLabel, playableMatches, computeQueue, classifyPayload,

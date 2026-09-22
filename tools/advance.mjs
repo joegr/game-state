@@ -18,18 +18,26 @@
 // (scores/) — they're working state on the way to a confirmed result, not
 // part of the record.
 //
-// Subcommands: ingest · draw · tally · result · sim · stage · purge · status
+// The draw is the moment the field freezes: buildDraw's output depends on the
+// roster array it is given, so once `drawSeed` is set, changing either the
+// seed or the roster silently invalidates every matchId already recorded in
+// results.md. `draw` and `ingest` both guard against that below.
+//
+// Subcommands: ingest · draw · tally · result · stage · purge · status
 
 import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, readdirSync } from 'node:fs';
 import { hashToken, generateCode, decodeBlob, encodeBlob } from '../js/identity.js';
 import {
-  buildDraw, applyResult, simAll, computeQueue, playableMatches, classifyPayload,
+  buildDraw, applyResult, computeQueue, playableMatches, classifyPayload,
   parseConfigMd, formatConfigMd, parseRosterMd, formatRosterMd,
   parseResultsMd, formatResultsMd, signupProgress,
 } from '../js/engine.js';
 import { p, fetchRosterMd, fetchResultsMd, ghPutFile } from './lib.mjs';
 
-const tournament = parseConfigMd(readFileSync(p('config', 'tournament.md'), 'utf8'));
+// TOURNAMENT_FILE mirrors ROSTER_FILE/RESULTS_FILE in lib.mjs: point all three
+// at scratch files to exercise the CLI offline, against nothing real.
+const configPath = process.env.TOURNAMENT_FILE || p('config', 'tournament.md');
+const tournament = parseConfigMd(readFileSync(configPath, 'utf8'));
 
 async function fetchRoster() {
   return parseRosterMd(await fetchRosterMd(tournament)).sort((a, b) => a.fp.localeCompare(b.fp));
@@ -46,18 +54,18 @@ async function reconstruct() {
 
 const [cmd, ...args] = process.argv.slice(2);
 const flag = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; };
+const has = (name) => args.includes(name);
 
 switch (cmd) {
   case 'ingest': await ingest(args[0]); break;
   case 'draw': await draw(); break;
   case 'tally': await tally(); break;
   case 'result': await result(args[0], args[1], args[2], args[3]); break;
-  case 'sim': await sim(); break;
   case 'stage': await stage(args[0]); break;
   case 'purge': purge(); break;
   case 'status': await status(); break;
   default:
-    console.log('Usage: node advance.mjs <ingest <file>|draw|tally|result <matchId> <winnerFp> <scoreWinner> <scoreLoser>|sim|stage <phaseId>|purge|status> [--seed S]');
+    console.log('Usage: node advance.mjs <ingest <file>|draw|tally|result <matchId> <winnerFp> <scoreWinner> <scoreLoser>|stage <phaseId>|purge|status> [--seed S] [--force]');
 }
 
 // Reads a text file of pasted blobs (signups + score reports, auto-detected).
@@ -65,9 +73,14 @@ switch (cmd) {
 // via gh in ONE call. Score reports: verified against the live roster,
 // written to local scores/ for `tally` — never published directly; only a
 // CONFIRMED result (via `result`) becomes part of the record.
+//
+// Once the draw has run the roster is frozen: appending a team would change
+// buildDraw's input array and rebuild a different bracket under the results
+// already published. Late signups are counted and reported, never published.
 async function ingest(file) {
   if (!file) { console.error('Usage: ingest <file>'); process.exit(1); }
   const text = readFileSync(file, 'utf8');
+  const drawn = !!tournament.drawSeed;
   const roster = await fetchRoster();
   const existingFps = new Set(roster.map((t) => t.fp));
   const byFp = new Map(roster.map((t) => [t.fp, t.tokenHash]));
@@ -93,23 +106,54 @@ async function ingest(file) {
     }
   }
 
-  if (newTeams.length) {
+  if (newTeams.length && drawn) {
+    console.error(`Refusing to add ${newTeams.length} team(s): the draw has already run (seed "${tournament.drawSeed}").`);
+    console.error('The bracket is rebuilt from roster.md every time it is read, so adding a team now would');
+    console.error('produce a different bracket and orphan every result already in results.md.');
+    console.error(`Late team(s): ${newTeams.map((t) => t.fp).join(', ')}`);
+  } else if (newTeams.length) {
     ghPutFile(tournament.rosterRepo, 'roster.md', formatRosterMd([...roster, ...newTeams]), `ingest: +${newTeams.length} team(s)`);
   }
-  console.log(`Ingested: +${newTeams.length} team(s) published to roster.md, ${scores} score report(s) saved locally for tally${dup ? `, ${dup} duplicate` : ''}${bad ? `, ${bad} unreadable/unauthenticated` : ''}.`);
+
+  const published = drawn ? 0 : newTeams.length;
+  const late = drawn ? newTeams.length : 0;
+  console.log(`Ingested: +${published} team(s) published to roster.md, ${scores} score report(s) saved locally for tally${late ? `, ${late} rejected as late (post-draw)` : ''}${dup ? `, ${dup} duplicate` : ''}${bad ? `, ${bad} unreadable/unauthenticated` : ''}.`);
+  if (late) process.exitCode = 1;
 }
 
 // Publishes only the seed — the bracket itself needs nothing else stored.
+// Drawing twice is the other half of the freeze: a new seed reshuffles the
+// same roster into a different bracket, so every published matchId stops
+// meaning what it meant. Refused unless --force, and --force with results
+// already on record says exactly what it is about to orphan.
 async function draw() {
   const roster = await fetchRoster();
   if (roster.length < 2) { console.error('Need at least 2 teams in the roster to draw.'); process.exit(1); }
 
+  if (tournament.drawSeed) {
+    const existing = parseResultsMd(await fetchResultsMd(tournament));
+    console.error(`The draw has already run (seed "${tournament.drawSeed}").`);
+    console.error('Re-drawing reshuffles the same roster into a different bracket, which invalidates');
+    console.error('every result already in results.md.');
+    if (!has('--force')) { console.error('Pass --force if you are certain. Nothing has been changed.'); process.exit(1); }
+    if (existing.length) {
+      console.error(`--force will orphan ${existing.length} confirmed result(s): ${existing.map((r) => r.matchId).join(', ')}`);
+      console.error('Clear results.md in the roster repo first if that is really what you want.');
+      process.exit(1);
+    }
+    console.error('--force accepted: no results published yet, so nothing is orphaned.');
+  }
+
   const seed = flag('--seed', `${tournament.name}:${roster.length}:${Date.now()}`);
   const state = buildDraw(roster.map((t) => t.fp), seed); // local preview only, not stored
 
+  // Push first, then mirror locally: the published file is the record, and a
+  // local copy claiming a seed that never made it to GitHub is worse than no
+  // local copy at all (the next `draw` would refuse for a draw that never
+  // happened).
   const updated = { ...tournament, drawSeed: seed };
-  writeFileSync(p('config', 'tournament.md'), formatConfigMd(updated));
   ghPutFile(tournament.appRepo, 'config/tournament.md', formatConfigMd(updated), `draw: seed ${seed}`);
+  writeFileSync(configPath, formatConfigMd(updated));
   console.log(`Drew ${roster.length}-team bracket (seed "${seed}"), ${state.rounds.length} rounds. Pushed to ${tournament.appRepo} via gh.`);
 }
 
@@ -164,28 +208,6 @@ async function result(matchId, winnerFp, scoreWinner, scoreLoser) {
   else await status();
 }
 
-// TEST HELPER, not for production: plays every remaining match locally and
-// publishes the whole batch of new results in ONE push. Meant for use with
-// ROSTER_FILE/RESULTS_FILE local overrides (see tools/lib.mjs) — running it
-// against the real roster/results repos would flood them with fake results.
-async function sim() {
-  const { state } = await reconstruct();
-  if (!state) { console.error('No draw yet. Run: node advance.mjs draw'); process.exit(1); }
-  const before = new Set(state.rounds.flatMap((r) => r.matches).filter((m) => m.winner).map((m) => m.id));
-  const r = simAll(state);
-
-  const results = parseResultsMd(await fetchResultsMd(tournament));
-  const now = new Date().toISOString();
-  for (const round of state.rounds) {
-    for (const m of round.matches) {
-      if (m.winner && !before.has(m.id)) results.push({ matchId: m.id, winner: m.winner, scoreWinner: '', scoreLoser: '', confirmedAt: now });
-    }
-  }
-  ghPutFile(tournament.rosterRepo, 'results.md', formatResultsMd(results), 'sim: simulated all remaining matches');
-  console.log(`Simulated all rounds. 🏆 Champion: ${r.champion}. Pushed to ${tournament.rosterRepo}/results.md via gh.`);
-  if (r.complete) purge();
-}
-
 // The only way activePhase changes: publishes straight to the app repo via
 // gh, so progressing a stage requires an authenticated `gh` with push access
 // to that repo — there is no key to check anymore, so this IS the gate.
@@ -196,8 +218,8 @@ async function stage(phaseId) {
     process.exit(1);
   }
   const updated = { ...tournament, activePhase: phaseId };
-  writeFileSync(p('config', 'tournament.md'), formatConfigMd(updated));
-  ghPutFile(tournament.appRepo, 'config/tournament.md', formatConfigMd(updated), `stage: -> ${phaseId}`);
+  ghPutFile(tournament.appRepo, 'config/tournament.md', formatConfigMd(updated), `stage: -> ${phaseId}`); // push first — see draw()
+  writeFileSync(configPath, formatConfigMd(updated));
   console.log(`Advanced to phase "${phaseId}" and pushed to ${tournament.appRepo} via gh. Pages will redeploy.`);
 }
 

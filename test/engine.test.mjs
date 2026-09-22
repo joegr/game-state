@@ -2,9 +2,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildDraw, applyResult, simAll, computeQueue, buildPublic, buildViews,
+  buildDraw, applyResult, computeQueue, buildPublic, buildViews,
   playableMatches, currentPhaseLabel, buildGroups, signupProgress, buildSignupProgress,
   formatRosterMd, parseRosterMd, formatResultsMd, parseResultsMd,
+  formatConfigMd, parseConfigMd, classifyPayload,
 } from '../js/engine.js';
 
 const teams = (n) => Array.from({ length: n }, (_, i) => `T${String(i).padStart(2, '0')}`);
@@ -69,14 +70,6 @@ test('applyResult: deciding the final sets champion + complete', () => {
   assert.equal(r.complete, true);
   assert.equal(r.champion, final.a);
   assert.equal(s.status, 'complete');
-});
-
-test('simAll: plays every match to a champion', () => {
-  const s = buildDraw(teams(16), 'sim');
-  const r = simAll(s);
-  assert.equal(r.complete, true);
-  assert.ok(r.champion);
-  assert.ok(s.rounds.every((rd) => rd.matches.every((m) => !(m.a && m.b) || m.winner)));
   assert.equal(currentPhaseLabel(s), 'complete');
 });
 
@@ -145,9 +138,10 @@ test('buildPublic: counts and status reflect state', () => {
 
 test('buildViews: champion / eliminated / scheduled perspectives', () => {
   const s = buildDraw(teams(4), 'views');
-  const m0 = s.rounds[0].matches[0], m1 = s.rounds[0].matches[1];
-  simAll(s);
+  // Play it out the way the organizer would: side A wins every match.
+  for (const round of s.rounds) for (const m of round.matches) applyResult(s, m.id, m.a);
   const champ = s.champion;
+  assert.ok(champ);
   const views = buildViews(s, teams(4));
   assert.equal(views[champ].status, 'champion');
   const losers = teams(4).filter((t) => t !== champ);
@@ -207,6 +201,88 @@ test('formatRosterMd / parseRosterMd round-trip the roster', () => {
 
 test('formatRosterMd: an empty roster still parses back to an empty list', () => {
   assert.deepEqual(parseRosterMd(formatRosterMd([])), []);
+});
+
+// The determinism guarantee. buildDraw's shuffle consumes the roster array in
+// the order it is handed, so two renderings of the same field in different row
+// orders would otherwise reconstruct two different brackets from one seed.
+// Sorting by `fp` inside formatRosterMd is what makes the published file
+// canonical — this is the regression test for that.
+test('formatRosterMd: sorts by code, so one seed can only mean one bracket', () => {
+  const t = (fp, n) => ({ fp, tokenHash: `hash${n}`, registeredAt: `2026-01-0${n}T00:00:00Z` });
+  const registrationOrder = [t('ZZ99', 1), t('AB12', 2), t('MM55', 3)];
+  const someOtherOrder = [t('MM55', 3), t('ZZ99', 1), t('AB12', 2)];
+
+  const a = formatRosterMd(registrationOrder);
+  assert.equal(a, formatRosterMd(someOtherOrder));
+  assert.deepEqual(parseRosterMd(a).map((r) => r.fp), ['AB12', 'MM55', 'ZZ99']);
+
+  const strip = ({ createdAt, updatedAt, ...rest }) => rest;
+  const bracket = (md) => strip(buildDraw(parseRosterMd(md).map((r) => r.fp), 'fixed-seed'));
+  assert.deepEqual(bracket(a), bracket(formatRosterMd(someOtherOrder)));
+});
+
+// ---- tournament.md (the organizer-owned spine) --------------------------------
+
+const CONFIG = {
+  name: 'The Autumn Gauntlet',
+  tagline: 'simple state-based tournaments',
+  teamCount: 32,
+  groupSize: 4,
+  format: 'single-elimination',
+  appRepo: 'joegr/game-state',
+  rosterRepo: 'joegr/game-state-roster',
+  activePhase: 'signup',
+  drawSeed: null,
+  phases: [
+    { id: 'signup', kind: 'signup', label: 'Registration', blurb: 'Captains register their team.' },
+    { id: 'final', kind: 'round', label: 'The Final', blurb: '' },
+  ],
+};
+
+test('formatConfigMd / parseConfigMd round-trip the tournament spine', () => {
+  const md = formatConfigMd(CONFIG);
+  assert.match(md, /^# The Autumn Gauntlet/);
+  assert.match(md, /- Draw seed: \(none\)/); // null renders as (none), not "null"
+  assert.deepEqual(parseConfigMd(md), CONFIG);
+});
+
+test('parseConfigMd: a set draw seed survives the round-trip; (none) means null', () => {
+  const drawn = { ...CONFIG, drawSeed: 'The Autumn Gauntlet:32:1700000000000' };
+  assert.equal(parseConfigMd(formatConfigMd(drawn)).drawSeed, drawn.drawSeed);
+  assert.equal(parseConfigMd(formatConfigMd(CONFIG)).drawSeed, null);
+});
+
+test('parseConfigMd: tolerates hand edits — odd spacing and label casing', () => {
+  const md = formatConfigMd(CONFIG)
+    .replace('- Active phase: signup', '-   ACTIVE PHASE:   final   ')
+    .replace('- Team count: 32', '- team count:16');
+  const t = parseConfigMd(md);
+  assert.equal(t.activePhase, 'final');
+  assert.equal(t.teamCount, 16);
+});
+
+test('parseConfigMd: an empty blurb cell round-trips as an empty string', () => {
+  const t = parseConfigMd(formatConfigMd(CONFIG));
+  assert.equal(t.phases[1].blurb, '');
+  assert.equal(t.phases.length, 2);
+});
+
+// ---- pasted-blob classification ----------------------------------------------
+
+test('classifyPayload: tells a signup from a score report, and rejects the rest', () => {
+  assert.deepEqual(classifyPayload({ v: 1, token: 'tok' }), { type: 'signup', token: 'tok' });
+
+  const report = { v: 1, fp: 'AB12', token: 'tok', matchId: 'r8-m1', myScore: 2, oppScore: 1, ts: 'T' };
+  assert.deepEqual(classifyPayload(report), {
+    type: 'report', fp: 'AB12', token: 'tok', matchId: 'r8-m1', myScore: 2, oppScore: 1, ts: 'T',
+  });
+
+  for (const junk of [null, undefined, {}, 'a string', 42, { fp: 'AB12' }, { token: 123 }]) {
+    assert.equal(classifyPayload(junk), null, `expected null for ${JSON.stringify(junk)}`);
+  }
+  // A half-formed report (matchId but no code) is not silently treated as a signup.
+  assert.equal(classifyPayload({ token: 'tok', matchId: 'r8-m1' }), null);
 });
 
 // ---- results ledger -----------------------------------------------------------

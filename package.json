@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "game-state — simple state-based tournaments. Static, serverless, key-only.",
+  "description": "game-state — simple state-based tournaments. Static, serverless, markdown as the database of record.",
   "scripts": {
     "test": "node --test"
   },
