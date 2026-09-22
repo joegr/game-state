@@ -36,26 +36,27 @@ export function randomToken() {
 }
 
 // SHA-256 of a token, base64url-encoded. Safe to publish: the roster carries
-// only this hash, never the token itself, and 24 random bytes is far too much
-// entropy to brute-force from a published hash.
+// only this hash, never the token, and 24 random bytes is far too much entropy
+// to brute-force from a published hash.
 export async function hashToken(token) {
   const digest = await subtle.digest('SHA-256', new TextEncoder().encode(token));
   return bytesToB64url(new Uint8Array(digest));
 }
 
-// The team's anonymous name/ID: four random-looking uppercase alphanumerics
-// (A-Z, 0-9), derived from the SHA-256 of the token (or any string — the same
-// function derives a team's public bracket views). Stable and reproducible
-// from the token, so a captain who kept their token can always re-derive it.
-// (36^4 ~= 1.68M combos - collisions across ~32 teams are ~0.03%; the admin
-// console warns if two tokens ever map to the same code.)
-const TEAM_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-export async function fingerprint(input) {
+// The one shared code generator. Both sides of the hand-off use this exact
+// function: signup displays the code derived from its token, and the organizer
+// derives the same code when the entry is ingested. Keeping this in one module
+// prevents the two paths from drifting apart.
+const CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+export async function generateCode(input) {
   const digest = new Uint8Array(await subtle.digest('SHA-256', new TextEncoder().encode(input)));
   let code = '';
-  for (let i = 0; i < 4; i++) code += TEAM_ALPHABET[digest[i] % 36];
+  for (let i = 0; i < 4; i++) code += CODE_ALPHABET[digest[i] % CODE_ALPHABET.length];
   return code;
 }
+
+// Backwards-compatible name used by published bracket and roster code.
+export const fingerprint = generateCode;
 
 // ---- blobs for paste-and-copy transport ------------------------------------
 //
