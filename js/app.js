@@ -2,17 +2,22 @@
 // public tournament/status view lives on the landing page (index.html /
 // js/tournament.js); this page is the one that holds a team's own token.
 
-import { loadTournament, loadBracket, loadPublic } from './config.js';
+import { loadTournament, loadTournamentState } from './config.js';
+import { buildViews } from './engine.js';
 import { el, clear } from './util.js';
 import { renderSignup } from './signup.js';
 import { renderCaptain } from './captain.js';
 
 const app = document.getElementById('app');
-let tournament, bracket, pub;
+let tournament, progress, views, drawn;
 
 async function boot() {
   try {
-    [tournament, bracket, pub] = await Promise.all([loadTournament(), loadBracket(), loadPublic()]);
+    tournament = await loadTournament();
+    const { roster, progress: prog, state } = await loadTournamentState(tournament);
+    progress = prog;
+    drawn = !!state;
+    views = state ? buildViews(state, roster.map((t) => t.fp)) : {};
   } catch (err) {
     app.append(el('div', { class: 'card danger' }, el('h2', {}, 'Config error'), el('p', {}, String(err.message))));
     return;
@@ -38,8 +43,8 @@ function route() {
   const view = el('div', { class: 'view' });
   app.append(view);
   const hash = location.hash || '#/signup';
-  if (hash.startsWith('#/captain')) renderCaptain(view, tournament, bracket);
-  else renderSignup(view, tournament, pub);
+  if (hash.startsWith('#/captain')) renderCaptain(view, tournament, { drawn, views });
+  else renderSignup(view, tournament, progress);
 }
 
 boot();

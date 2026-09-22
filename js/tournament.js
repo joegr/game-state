@@ -2,19 +2,25 @@
 //
 // This is what a visitor to user.github.io/game-state/ sees first: the current
 // stage, a roadmap before the draw, and the anonymized bracket once matches
-// begin. Everything here is public and anonymous — the private "captain
+// begin. Everything here is reconstructed live from config/tournament.json
+// (the organizer-owned spine) plus the roster repo's roster.md/results.md —
+// there is no pre-baked snapshot in this repo. The private "captain
 // perspective" lives on captain.html.
 
-import { loadTournament, loadPublic } from './config.js';
+import { loadTournament, loadTournamentState } from './config.js';
+import { buildPublic } from './engine.js';
 import { currentPhase, isSignupOpen } from './stateMachine.js';
 import { el, clear } from './util.js';
 
 const app = document.getElementById('app');
-let tournament, pub;
+let tournament, progress, pub; // pub is null pre-draw
 
 async function boot() {
   try {
-    [tournament, pub] = await Promise.all([loadTournament(), loadPublic()]);
+    tournament = await loadTournament();
+    const { roster, progress: prog, state } = await loadTournamentState(tournament);
+    progress = prog;
+    pub = state ? buildPublic(state, tournament.name, roster.length) : null;
   } catch (err) {
     app.append(el('div', { class: 'card danger' }, el('h2', {}, 'Config error'), el('p', {}, String(err.message))));
     return;
@@ -33,8 +39,8 @@ function teamChip(fp, { winner, dim } = {}) {
 function render() {
   clear(app);
   const cur = currentPhase(tournament);
-  const drawn = pub.rounds && pub.rounds.length > 0;
-  const complete = pub.status === 'complete';
+  const drawn = !!pub;
+  const complete = pub?.status === 'complete';
 
   app.append(el('div', { class: 'card hero' },
     el('div', { class: 'row spread' },
@@ -51,7 +57,7 @@ function render() {
     drawn && !complete
       ? el('p', { class: 'muted sm' }, `${pub.teamCount || 0} teams · ${pub.matchesDecided}/${pub.matchesTotal} matches decided`)
       : null,
-    isSignupOpen(tournament, pub)
+    isSignupOpen(tournament, progress)
       ? el('a', { class: 'btn', href: 'index.html' }, 'Register your team →')
       : null,
   ));
@@ -84,7 +90,7 @@ function renderBracket() {
 
 // Before the draw: an ordered list of stages relative to the current one — no
 // dates, since nothing here is clock-driven. Advancing past a stage means the
-// organizer edits `activePhase` and pushes; this list just reflects that.
+// organizer pushes a new activePhase via `gh`; this list just reflects that.
 function renderRoadmap() {
   const cur = currentPhase(tournament);
   const curIdx = tournament.phases.findIndex((p) => p.id === cur?.id);
@@ -105,18 +111,20 @@ function renderRoadmap() {
     })),
   ));
 
-  if (cur?.kind === 'signup' && Array.isArray(pub.groups)) renderSignupProgress();
+  if (cur?.kind === 'signup') renderSignupProgress();
 }
 
 // Signups fill sequentially, groupSize at a time — no captain picks a group.
 // Registration closes on capacity (every group full), not on a clock, so this
 // is the thing that actually determines whether "Register your team" shows.
+// `progress` is derived live from the roster repo — there's nothing to
+// publish separately for this to work.
 function renderSignupProgress() {
   app.append(el('div', { class: 'card' },
     el('h3', {}, 'Signups'),
-    el('p', { class: 'muted sm' }, `${pub.registered}/${pub.capacity} confirmed`,
-      pub.full ? ' — field is full.' : '.'),
-    el('div', { class: 'row' }, pub.groups.map((g) =>
+    el('p', { class: 'muted sm' }, `${progress.registered}/${progress.capacity} confirmed`,
+      progress.full ? ' — field is full.' : '.'),
+    el('div', { class: 'row' }, progress.groups.map((g) =>
       el('span', { class: 'badge ' + (g.full ? 'good' : 'upcoming') }, `Group ${g.index + 1}: ${g.filled}/${g.slots}`))),
   ));
 }

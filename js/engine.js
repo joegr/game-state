@@ -5,6 +5,63 @@
 // browser admin console (js/admin.js) and the Node CLI (tools/advance.mjs) so
 // there is exactly ONE implementation of the rules.
 
+// ---- config (tournament.md, the organizer-owned spine) ----------------------
+//
+// Every durable fact about the tournament lives as markdown, in plain text —
+// no JSON anywhere in this app. `tournament.md` is the one file the organizer
+// edits directly (name, teamCount, format, phases) and the one field they
+// change over time (activePhase, drawSeed) to progress the tournament; every
+// change to it publishes only via `gh` (see tools/advance.mjs). Field lines
+// are `- Label: value`; matching is case-insensitive and whitespace-tolerant
+// so hand edits don't need to be exact.
+
+const CONFIG_FIELDS = [
+  ['Team count', 'teamCount', Number],
+  ['Group size', 'groupSize', Number],
+  ['Format', 'format', String],
+  ['App repo', 'appRepo', String],
+  ['Roster repo', 'rosterRepo', String],
+  ['Active phase', 'activePhase', String],
+  ['Draw seed', 'drawSeed', (v) => (v === '(none)' || v === '' ? null : v)],
+];
+
+export function formatConfigMd(t) {
+  const bullets = CONFIG_FIELDS.map(([label, key]) => `- ${label}: ${t[key] ?? (key === 'drawSeed' ? '(none)' : '')}`).join('\n');
+  const header = '| ID | Kind | Label | Blurb |\n|----|------|-------|-------|';
+  const rows = t.phases.map((p) => `| ${p.id} | ${p.kind} | ${p.label} | ${p.blurb || ''} |`).join('\n');
+  return `# ${t.name}\n\n_${t.tagline || ''}_\n\n${bullets}\n\n## Phases\n\n${header}\n${rows}\n`;
+}
+
+export function parseConfigMd(md) {
+  const lines = md.split('\n');
+  const titleLine = lines.find((l) => l.startsWith('# '));
+  const taglineLine = lines.find((l) => /^_.*_$/.test(l.trim()));
+  const out = {
+    name: titleLine ? titleLine.slice(2).trim() : '',
+    tagline: taglineLine ? taglineLine.trim().slice(1, -1) : '',
+  };
+
+  const byLabel = new Map(CONFIG_FIELDS.map(([label, key, cast]) => [label.toLowerCase(), [key, cast]]));
+  for (const line of lines) {
+    const m = line.match(/^-\s*([^:]+):\s*(.*)$/);
+    if (!m) continue;
+    const hit = byLabel.get(m[1].trim().toLowerCase());
+    if (!hit) continue;
+    const [key, cast] = hit;
+    out[key] = cast(m[2].trim());
+  }
+
+  const tableLines = lines.map((l) => l.trim()).filter((l) => l.startsWith('|'));
+  out.phases = tableLines.slice(2) // header + separator
+    .map((line) => {
+      const [id, kind, label, blurb] = line.split('|').slice(1, -1).map((c) => c.trim());
+      return id ? { id, kind, label, blurb: blurb || '' } : null;
+    })
+    .filter(Boolean);
+
+  return out;
+}
+
 // ---- seeded RNG (mulberry32) — reproducible, auditable draws ----------------
 
 export function seededRng(seedStr) {
@@ -182,16 +239,23 @@ export function computeQueue(state, reports) {
   return queue;
 }
 
-// ---- roster (config/roster.md) ----------------------------------------------
+// ---- roster (roster.md, in the roster repo) ---------------------------------
 //
 // The confirmed roster is a committed markdown table: `fp` (team code) and
 // `tokenHash` (never the raw token) per team, plus when they were added. It's
 // the roster's own git history that makes it auditable — a plain table, not a
 // blob, so a diff of who joined when is just a diff.
+//
+// Rows are always written sorted by `fp`. This isn't cosmetic: buildDraw()'s
+// shuffle depends on the INPUT ARRAY'S ORDER, not just the seed, so if the
+// file's row order could drift (registration order, a manual edit), the same
+// seed would reconstruct a DIFFERENT bracket. Sorting gives one canonical
+// order no matter how the rows got there.
 
 export function formatRosterMd(teams) {
+  const sorted = [...teams].sort((a, b) => a.fp.localeCompare(b.fp));
   const header = '| Code | Token hash | Registered |\n|------|------------|------------|';
-  const rows = teams.map((t) => `| ${t.fp} | ${t.tokenHash} | ${t.registeredAt || ''} |`).join('\n');
+  const rows = sorted.map((t) => `| ${t.fp} | ${t.tokenHash} | ${t.registeredAt || ''} |`).join('\n');
   return '# Roster\n\n'
     + '_Confirmed teams. `tokenHash` proves a captain\'s identity for score reports — never publish the raw token._\n\n'
     + header + (rows ? '\n' + rows : '') + '\n';
@@ -212,7 +276,8 @@ export function parseRosterMd(md) {
 //
 // Once a match is double-verified (both captains' reports agree) and the
 // organizer confirms it, the result is posted here — an append-only public
-// record, independent of config/queue.json's working state.
+// record. Score consensus itself (computeQueue, below) is working state that
+// never gets published; only a CONFIRMED result becomes a fact.
 
 export function formatResultsMd(results) {
   const header = '| Match | Winner | Score | Confirmed |\n|-------|--------|-------|-----------|';
@@ -232,6 +297,23 @@ export function parseResultsMd(md) {
       return { matchId, winner, scoreWinner, scoreLoser, confirmedAt: confirmedAt || null };
     })
     .filter(Boolean);
+}
+
+// ---- pasted-blob classification ---------------------------------------------
+//
+// A decoded blob is either a signup (a bare token) or a score report (a code +
+// token + match result). This is the ONE place that decides which — shared by
+// the CLI's real `ingest` and the admin console's dry-run preview, so the two
+// can never classify the same blob differently.
+
+export function classifyPayload(payload) {
+  if (!payload || typeof payload.token !== 'string') return null;
+  if (typeof payload.matchId === 'string' && typeof payload.fp === 'string') {
+    const { fp, token, matchId, myScore, oppScore, ts } = payload;
+    return { type: 'report', fp, token, matchId, myScore, oppScore, ts };
+  }
+  if (!payload.matchId) return { type: 'signup', token: payload.token };
+  return null;
 }
 
 // ---- signup capacity (pre-draw groups) --------------------------------------

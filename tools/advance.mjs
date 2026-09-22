@@ -1,162 +1,129 @@
 #!/usr/bin/env node
-// game-state — the bracket state machine (organizer / CI side).
+// game-state — the organizer CLI. No JSON, no local database: everything
+// durable is markdown, and the ONLY way any of it changes is this tool
+// calling `gh`. It owns nothing on disk except `config/tournament.md` (this
+// repo, the organizer-owned spine: name, format, activePhase, drawSeed) and
+// two files in the roster repo:
 //
-// Thin fs wrapper around the shared pure engine in ../js/engine.js (the same
-// module the browser admin console uses). No keys anywhere: a team's identity
-// is a token hash, checked by comparison, not verified by signature. It owns:
+//   roster.md    confirmed teams — code + token hash (never the raw token)
+//   results.md   confirmed match results, append-only
 //
-//   state/matches.json     the full bracket, every round & match (working state)
-//   config/public.json     anonymized public bracket / signup progress
-//   config/bracket.json    per-team PLAINTEXT views (the bracket is already public)
-//   config/queue.json      two-captain score consensus queue
+// The whole bracket is reconstructed on demand from
+// buildDraw(roster, tournament.drawSeed) replayed with every row in
+// results.md — nothing about it is stored beyond the seed. The browser
+// (js/config.js → loadTournamentState) does the exact same reconstruction,
+// so there is exactly one algorithm and two callers.
 //
-// The confirmed roster itself is NOT stored here — it lives in a separate
-// public repo (config/tournament.json → rosterRepo) and is fetched fresh on
-// every command that needs it. See tools/lib.mjs → fetchRosterMd.
+// Score reports are the one thing that stays local and unpublished
+// (scores/) — they're working state on the way to a confirmed result, not
+// part of the record.
 //
-// Subcommands: draw · result · sim · render · tally · progress · purge · status
-// After the FINAL match, result/sim auto-purge all stored data.
+// Subcommands: ingest · draw · tally · result · sim · stage · purge · status
 
 import { readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, readdirSync } from 'node:fs';
-import { hashToken, decodeBlob } from '../js/identity.js';
+import { hashToken, generateCode, decodeBlob, encodeBlob } from '../js/identity.js';
 import {
-  buildDraw, applyResult, simAll, computeQueue, buildPublic, buildViews,
-  currentPhaseLabel, signupProgress, buildSignupProgress,
-  parseRosterMd, formatResultsMd, parseResultsMd,
+  buildDraw, applyResult, simAll, computeQueue, playableMatches, classifyPayload,
+  parseConfigMd, formatConfigMd, parseRosterMd, formatRosterMd,
+  parseResultsMd, formatResultsMd, signupProgress,
 } from '../js/engine.js';
 import { p, fetchRosterMd, fetchResultsMd, ghPutFile } from './lib.mjs';
 
-const readJson = (f) => JSON.parse(readFileSync(p(...f), 'utf8'));
-const writeJson = (f, o) => writeFileSync(p(...f), JSON.stringify(o, null, 2) + '\n');
-const tournament = readJson(['config', 'tournament.json']);
+const tournament = parseConfigMd(readFileSync(p('config', 'tournament.md'), 'utf8'));
 
-async function roster() {
-  return parseRosterMd(await fetchRosterMd(tournament));
+async function fetchRoster() {
+  return parseRosterMd(await fetchRosterMd(tournament)).sort((a, b) => a.fp.localeCompare(b.fp));
+}
+
+// The one reconstruction, mirroring js/config.js → loadTournamentState.
+async function reconstruct() {
+  const roster = await fetchRoster();
+  if (!tournament.drawSeed) return { roster, state: null };
+  const state = buildDraw(roster.map((t) => t.fp), tournament.drawSeed);
+  for (const r of parseResultsMd(await fetchResultsMd(tournament))) applyResult(state, r.matchId, r.winner);
+  return { roster, state };
 }
 
 const [cmd, ...args] = process.argv.slice(2);
 const flag = (name, def) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : def; };
 
 switch (cmd) {
+  case 'ingest': await ingest(args[0]); break;
   case 'draw': await draw(); break;
-  case 'result': await result(args[0], args[1]); break;
-  case 'sim': await sim(); break;
-  case 'render': await render(readState()); break;
   case 'tally': await tally(); break;
-  case 'progress': await progress(); break;
-  case 'stage': stage(args[0]); break;
-  case 'purge': purge('manual purge'); break;
+  case 'result': await result(args[0], args[1], args[2], args[3]); break;
+  case 'sim': await sim(); break;
+  case 'stage': await stage(args[0]); break;
+  case 'purge': purge(); break;
   case 'status': await status(); break;
   default:
-    console.log('Usage: node advance.mjs <draw|result <matchId> <winnerFp>|tally|sim|render|progress|stage <phaseId>|purge|status> [--seed S]');
+    console.log('Usage: node advance.mjs <ingest <file>|draw|tally|result <matchId> <winnerFp> <scoreWinner> <scoreLoser>|sim|stage <phaseId>|purge|status> [--seed S]');
 }
 
-function readState() {
-  if (!existsSync(p('state', 'matches.json'))) { console.error('No bracket yet. Run: node advance.mjs draw'); process.exit(1); }
-  return readJson(['state', 'matches.json']);
+// Reads a text file of pasted blobs (signups + score reports, auto-detected).
+// Signups: verified against the live roster, new ones published to roster.md
+// via gh in ONE call. Score reports: verified against the live roster,
+// written to local scores/ for `tally` — never published directly; only a
+// CONFIRMED result (via `result`) becomes part of the record.
+async function ingest(file) {
+  if (!file) { console.error('Usage: ingest <file>'); process.exit(1); }
+  const text = readFileSync(file, 'utf8');
+  const roster = await fetchRoster();
+  const existingFps = new Set(roster.map((t) => t.fp));
+  const byFp = new Map(roster.map((t) => [t.fp, t.tokenHash]));
+
+  const newTeams = [];
+  let dup = 0, scores = 0, bad = 0;
+  mkdirSync(p('scores'), { recursive: true });
+
+  for (const tok of text.match(/[A-Za-z0-9_-]{60,}/g) || []) {
+    let payload;
+    try { payload = decodeBlob(tok); } catch { bad++; continue; }
+    const c = classifyPayload(payload);
+    if (!c) { bad++; continue; }
+    if (c.type === 'signup') {
+      const fp = await generateCode(c.token);
+      if (existingFps.has(fp) || newTeams.some((t) => t.fp === fp)) { dup++; continue; }
+      newTeams.push({ fp, tokenHash: await hashToken(c.token), registeredAt: new Date().toISOString() });
+    } else {
+      const expected = byFp.get(c.fp);
+      if (!expected || await hashToken(c.token) !== expected) { bad++; continue; }
+      writeFileSync(p('scores', `${c.matchId}-${c.fp}.txt`), encodeBlob(c) + '\n');
+      scores++;
+    }
+  }
+
+  if (newTeams.length) {
+    ghPutFile(tournament.rosterRepo, 'roster.md', formatRosterMd([...roster, ...newTeams]), `ingest: +${newTeams.length} team(s)`);
+  }
+  console.log(`Ingested: +${newTeams.length} team(s) published to roster.md, ${scores} score report(s) saved locally for tally${dup ? `, ${dup} duplicate` : ''}${bad ? `, ${bad} unreadable/unauthenticated` : ''}.`);
 }
 
+// Publishes only the seed — the bracket itself needs nothing else stored.
 async function draw() {
-  const teams = await roster();
-  if (teams.length < 2) { console.error('Need at least 2 teams in the roster to draw.'); process.exit(1); }
+  const roster = await fetchRoster();
+  if (roster.length < 2) { console.error('Need at least 2 teams in the roster to draw.'); process.exit(1); }
 
-  const seed = flag('--seed', `${tournament.name}:${teams.length}:${Date.now()}`);
-  const state = buildDraw(teams.map((t) => t.fp), seed);
+  const seed = flag('--seed', `${tournament.name}:${roster.length}:${Date.now()}`);
+  const state = buildDraw(roster.map((t) => t.fp), seed); // local preview only, not stored
 
-  mkdirSync(p('state'), { recursive: true });
-  writeJson(['state', 'matches.json'], state);
-  render(state);
-  console.log(`Drew ${teams.length}-team bracket (seed "${seed}"), ${state.rounds.length} rounds.`);
-  await status();
+  const updated = { ...tournament, drawSeed: seed };
+  writeFileSync(p('config', 'tournament.md'), formatConfigMd(updated));
+  ghPutFile(tournament.appRepo, 'config/tournament.md', formatConfigMd(updated), `draw: seed ${seed}`);
+  console.log(`Drew ${roster.length}-team bracket (seed "${seed}"), ${state.rounds.length} rounds. Pushed to ${tournament.appRepo} via gh.`);
 }
 
-async function result(matchId, winnerFp) {
-  if (!matchId || !winnerFp) { console.error('Usage: result <matchId> <winnerFp>'); process.exit(1); }
-  const state = readState();
-  const r = applyResult(state, matchId, winnerFp);
-  if (!r.ok) { console.log(r.error); process.exit(r.error.includes('already decided') ? 0 : 1); }
-  await postResult(matchId, winnerFp);
-  await finish(state, `${matchId} → ${winnerFp}`, r);
-}
-
-// Once a match is confirmed here, it's posted to the public results ledger
-// (results.md, in the roster repo) via gh — this is what makes a result an
-// actual public fact rather than just local working state. The score comes
-// from the agreed queue entry, if config/queue.json still has it.
-async function postResult(matchId, winnerFp) {
-  let scoreWinner = '', scoreLoser = '';
-  try {
-    const q = readJson(['config', 'queue.json']).matches[matchId];
-    if (q?.status === 'agreed') [scoreWinner, scoreLoser] = [Math.max(q.scoreA, q.scoreB), Math.min(q.scoreA, q.scoreB)];
-  } catch { /* no queue yet — post without a score */ }
-  const results = parseResultsMd(await fetchResultsMd(tournament));
-  results.push({ matchId, winner: winnerFp, scoreWinner, scoreLoser, confirmedAt: new Date().toISOString() });
-  ghPutFile(tournament.rosterRepo, 'results.md', formatResultsMd(results), `result: ${matchId} -> ${winnerFp}`);
-  console.log(`Posted to ${tournament.rosterRepo}/results.md via gh.`);
-}
-
-// The ONLY way to advance activePhase: publishes straight to the app repo via
-// gh, so progressing a stage requires an authenticated `gh` with push access
-// to that repo — there is no key to check anymore, so this IS the gate.
-function stage(phaseId) {
-  if (!phaseId) { console.error('Usage: stage <phaseId>'); process.exit(1); }
-  if (!tournament.phases.some((ph) => ph.id === phaseId)) {
-    console.error(`Unknown phase "${phaseId}". Valid: ${tournament.phases.map((ph) => ph.id).join(', ')}`);
-    process.exit(1);
-  }
-  const updated = { ...tournament, activePhase: phaseId };
-  writeJson(['config', 'tournament.json'], updated);
-  ghPutFile(tournament.appRepo, 'config/tournament.json', JSON.stringify(updated, null, 2) + '\n', `stage: -> ${phaseId}`);
-  console.log(`Advanced to phase "${phaseId}" and pushed to ${tournament.appRepo} via gh. Pages will redeploy.`);
-}
-
-async function sim() {
-  if (!existsSync(p('state', 'matches.json'))) await draw();
-  const state = readState();
-  const r = simAll(state);
-  await finish(state, 'simulated all rounds', r);
-}
-
-async function finish(state, msg, result) {
-  writeJson(['state', 'matches.json'], state);
-  render(state);
-  console.log(`Applied: ${msg}`);
-  if (result.complete) {
-    console.log(`🏆 Champion decided: ${result.champion}`);
-    purge('tournament complete', result.champion);
-  } else {
-    await status();
-  }
-}
-
-// Regenerate the public bracket + per-team plaintext views from state. The
-// team list comes straight from round 0 — every drawn team appears there, so
-// there's no need to re-fetch the roster just to render.
-function render(state) {
-  const teamFps = state.rounds[0].matches.flatMap((m) => [m.a, m.b]).filter(Boolean);
-  writeJson(['config', 'public.json'], buildPublic(state, tournament.name, teamFps.length));
-
-  const views = buildViews(state, teamFps);
-  writeJson(['config', 'bracket.json'], {
-    schemaVersion: 1, generatedAt: new Date().toISOString(),
-    activePhase: state.status === 'complete' ? 'complete' : currentPhaseLabel(state),
-    seed: state.seed || null, teamCount: teamFps.length,
-    note: 'Per-team views. The bracket is already public, so these are plaintext — only score reports need a token.',
-    views,
-  });
-}
-
-// Two-captain consensus: check each report's token against the roster, then
-// let the engine compute the queue. A report whose token doesn't hash to the
-// claimed team's roster entry is silently dropped, same as unreadable input.
+// Two-captain consensus over locally-collected reports (scores/) against the
+// live, reconstructed bracket. Never published — only `result` publishes.
 async function tally() {
-  const state = readState();
-  const byFp = new Map((await roster()).map((t) => [t.fp, t.tokenHash]));
+  const { state } = await reconstruct();
+  if (!state) { console.error('No draw yet. Run: node advance.mjs draw'); process.exit(1); }
 
   const dir = p('scores');
   const files = existsSync(dir) ? readdirSync(dir).filter((f) => !f.startsWith('.')) : [];
   const reports = [];
   let accepted = 0, rejected = 0;
+  const byFp = new Map((await fetchRoster()).map((t) => [t.fp, t.tokenHash]));
   for (const f of files) {
     const mm = readFileSync(p('scores', f), 'utf8').match(/([A-Za-z0-9_-]{60,})/);
     if (!mm) { rejected++; continue; }
@@ -169,55 +136,92 @@ async function tally() {
   }
 
   const queue = computeQueue(state, reports);
-  writeJson(['config', 'queue.json'], {
-    schemaVersion: 1, generatedAt: new Date().toISOString(),
-    note: 'Match result queue. A match is "agreed" only when both captains report mirrored scores; the organizer confirms it to advance.',
-    matches: queue,
-  });
-  const agreed = Object.values(queue).filter((q) => q.status === 'agreed').length;
-  console.log(`Tallied ${accepted} report(s), ${rejected} rejected. Queue: ${Object.keys(queue).length} match(es), ${agreed} agreed & ready.`);
-}
-
-// Pre-draw counterpart to `render()`: publishes the confirmed roster's signup
-// capacity to config/public.json so the live site can decide whether
-// registration is still open. Nothing does this automatically — it's a
-// deliberate organizer action, same as every other state change here.
-async function progress() {
-  const teams = await roster();
-  const obj = buildSignupProgress(teams.map((t) => t.fp), tournament.name, tournament.teamCount, tournament.groupSize);
-  writeJson(['config', 'public.json'], obj);
-  console.log(`Published signup progress: ${obj.registered}/${obj.capacity} confirmed${obj.full ? ' (full)' : ''}.`);
-  for (const g of obj.groups) console.log(`  Group ${g.index + 1}: ${g.filled}/${g.slots}${g.full ? ' FULL' : ''}`);
-}
-
-function purge(reason, champion = null) {
-  for (const dir of ['scores', 'state']) {
-    if (existsSync(p(dir))) rmSync(p(dir), { recursive: true, force: true });
+  const agreed = Object.entries(queue).filter(([, v]) => v.status === 'agreed');
+  console.log(`Tallied ${accepted} report(s), ${rejected} rejected. ${agreed.length} agreed & ready:`);
+  for (const [id, v] of agreed) {
+    const [hi, lo] = [Math.max(v.scoreA, v.scoreB), Math.min(v.scoreA, v.scoreB)];
+    console.log(`  node tools/advance.mjs result ${id} ${v.winner} ${hi} ${lo}`);
   }
-  writeJson(['config', 'queue.json'], { schemaVersion: 1, generatedAt: new Date().toISOString(), note: 'Tournament complete — queue cleared.', matches: {} });
-  writeJson(['config', 'bracket.json'], {
-    schemaVersion: 1, generatedAt: new Date().toISOString(), activePhase: 'complete',
-    completed: true, champion, teamCount: 0,
-    note: `Tournament complete (${reason}). All stored data cascade-deleted.`,
-    views: {},
-  });
-  console.log(`🧹 Cascade purge (${reason}): removed scores/ state/; bracket.json reset to champion record.`);
+}
+
+// The only way a match result becomes a fact: validated against the live,
+// reconstructed bracket, then posted to results.md via gh.
+async function result(matchId, winnerFp, scoreWinner, scoreLoser) {
+  if (!matchId || !winnerFp || scoreWinner == null || scoreLoser == null) {
+    console.error('Usage: result <matchId> <winnerFp> <scoreWinner> <scoreLoser>'); process.exit(1);
+  }
+  const { state } = await reconstruct();
+  if (!state) { console.error('No draw yet. Run: node advance.mjs draw'); process.exit(1); }
+  const r = applyResult(state, matchId, winnerFp);
+  if (!r.ok) { console.log(r.error); process.exit(r.error.includes('already decided') ? 0 : 1); }
+
+  const results = parseResultsMd(await fetchResultsMd(tournament));
+  results.push({ matchId, winner: winnerFp, scoreWinner, scoreLoser, confirmedAt: new Date().toISOString() });
+  ghPutFile(tournament.rosterRepo, 'results.md', formatResultsMd(results), `result: ${matchId} -> ${winnerFp}`);
+  console.log(`Posted ${matchId} -> ${winnerFp} (${scoreWinner}-${scoreLoser}) to ${tournament.rosterRepo}/results.md via gh.`);
+
+  if (r.complete) { console.log(`🏆 Champion decided: ${r.champion}`); purge(); }
+  else await status();
+}
+
+// TEST HELPER, not for production: plays every remaining match locally and
+// publishes the whole batch of new results in ONE push. Meant for use with
+// ROSTER_FILE/RESULTS_FILE local overrides (see tools/lib.mjs) — running it
+// against the real roster/results repos would flood them with fake results.
+async function sim() {
+  const { state } = await reconstruct();
+  if (!state) { console.error('No draw yet. Run: node advance.mjs draw'); process.exit(1); }
+  const before = new Set(state.rounds.flatMap((r) => r.matches).filter((m) => m.winner).map((m) => m.id));
+  const r = simAll(state);
+
+  const results = parseResultsMd(await fetchResultsMd(tournament));
+  const now = new Date().toISOString();
+  for (const round of state.rounds) {
+    for (const m of round.matches) {
+      if (m.winner && !before.has(m.id)) results.push({ matchId: m.id, winner: m.winner, scoreWinner: '', scoreLoser: '', confirmedAt: now });
+    }
+  }
+  ghPutFile(tournament.rosterRepo, 'results.md', formatResultsMd(results), 'sim: simulated all remaining matches');
+  console.log(`Simulated all rounds. 🏆 Champion: ${r.champion}. Pushed to ${tournament.rosterRepo}/results.md via gh.`);
+  if (r.complete) purge();
+}
+
+// The only way activePhase changes: publishes straight to the app repo via
+// gh, so progressing a stage requires an authenticated `gh` with push access
+// to that repo — there is no key to check anymore, so this IS the gate.
+async function stage(phaseId) {
+  if (!phaseId) { console.error('Usage: stage <phaseId>'); process.exit(1); }
+  if (!tournament.phases.some((ph) => ph.id === phaseId)) {
+    console.error(`Unknown phase "${phaseId}". Valid: ${tournament.phases.map((ph) => ph.id).join(', ')}`);
+    process.exit(1);
+  }
+  const updated = { ...tournament, activePhase: phaseId };
+  writeFileSync(p('config', 'tournament.md'), formatConfigMd(updated));
+  ghPutFile(tournament.appRepo, 'config/tournament.md', formatConfigMd(updated), `stage: -> ${phaseId}`);
+  console.log(`Advanced to phase "${phaseId}" and pushed to ${tournament.appRepo} via gh. Pages will redeploy.`);
+}
+
+// Clears local, unpublished working files (pending score reports). There is
+// nothing else local to reset — the record lives entirely in the two repos.
+function purge() {
+  if (existsSync(p('scores'))) rmSync(p('scores'), { recursive: true, force: true });
+  console.log('🧹 Cleared local scores/ (unpublished reports).');
 }
 
 async function status() {
-  if (!existsSync(p('state', 'matches.json'))) {
-    const prog = signupProgress((await roster()).map((t) => t.fp), tournament.teamCount, tournament.groupSize);
-    console.log(`Phase: registration. Confirmed roster: ${prog.registered}/${prog.capacity}${prog.full ? ' (full)' : ''}. No draw yet.`);
+  const { roster, state } = await reconstruct();
+  if (!state) {
+    const prog = signupProgress(roster.map((t) => t.fp), tournament.teamCount, tournament.groupSize);
+    console.log(`Phase: ${tournament.activePhase}. Confirmed roster: ${prog.registered}/${prog.capacity}${prog.full ? ' (full)' : ''}. No draw yet.`);
     for (const g of prog.groups) console.log(`  Group ${g.index + 1}: ${g.filled}/${g.slots}${g.full ? ' FULL' : ''}`);
     return;
   }
-  const state = readState();
   console.log(`\nSeed: ${state.seed}`);
   for (const r of state.rounds) console.log(`  ${r.label.padEnd(16)} ${r.matches.filter((m) => m.winner).length}/${r.matches.length} decided`);
   console.log(state.status === 'complete' ? `Champion: ${state.champion}` : 'In progress.');
-  const live = state.rounds.find((r) => r.matches.some((m) => m.a && m.b && !m.winner));
-  if (live) {
-    console.log(`\nPending in ${live.label}:`);
-    for (const m of live.matches.filter((x) => x.a && x.b && !x.winner)) console.log(`  ${m.id}:  ${m.a}  vs  ${m.b}`);
+  const sides = playableMatches(state);
+  if (sides.size) {
+    console.log('\nPending:');
+    for (const [id, s] of sides) console.log(`  ${id}:  ${s.a}  vs  ${s.b}`);
   }
 }

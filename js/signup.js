@@ -8,7 +8,7 @@ import { el, clear, identityStore, copy } from './util.js';
 import { randomToken, fingerprint } from './identity.js';
 import { isSignupOpen } from './stateMachine.js';
 
-export async function renderSignup(root, tournament, pub) {
+export async function renderSignup(root, tournament, progress) {
   clear(root);
 
   const existing = identityStore.load(tournament.name);
@@ -18,15 +18,15 @@ export async function renderSignup(root, tournament, pub) {
       el('h2', {}, 'You are registered'),
       el('p', { class: 'muted' }, 'Your token is stored on this device. Use the Captain view to track your run.'),
       el('p', {}, el('code', { class: 'mono' }, existing.fp)),
-      el('button', { class: 'btn ghost', onclick: () => { if (confirm('Forget this token? You cannot recover it.')) { identityStore.clear(tournament.name); renderSignup(root, tournament, pub); } } }, 'Forget token on this device'),
+      el('button', { class: 'btn ghost', onclick: () => { if (confirm('Forget this token? You cannot recover it.')) { identityStore.clear(tournament.name); renderSignup(root, tournament, progress); } } }, 'Forget token on this device'),
     ));
     return;
   }
 
-  if (!isSignupOpen(tournament, pub)) {
+  if (!isSignupOpen(tournament, progress)) {
     root.append(el('div', { class: 'card' },
-      el('h2', {}, pub?.full ? 'Registration is full' : 'Registration is not open yet'),
-      el('p', { class: 'muted' }, pub?.full
+      el('h2', {}, progress?.full ? 'Registration is full' : 'Registration is not open yet'),
+      el('p', { class: 'muted' }, progress?.full
         ? 'Every group has its full complement of teams — thanks for your interest!'
         : 'The organizer hasn\'t opened signups yet. Check back soon.'),
     ));

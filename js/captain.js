@@ -1,6 +1,8 @@
 // game-state — captain's-eye view.
 //
-// bracket.json carries a per-team view keyed by team code, and the bracket is
+// `bracket` here is `{ drawn, views }`, reconstructed client-side (see
+// js/app.js + js/config.js) from the roster repo's roster.md/results.md —
+// there is no bracket.json. Views are keyed by team code, and the bracket is
 // public anyway — every code shows up on it eventually. What a captain's token
 // protects is the one action that matters: reporting a score as that team.
 
@@ -25,7 +27,7 @@ export async function renderCaptain(root, tournament, bracket) {
   if (!view) {
     root.append(header, el('div', { class: 'card' },
       el('p', {}, 'Your team ', el('code', { class: 'mono' }, id.fp), ' is registered.'),
-      el('p', { class: 'muted' }, bracket.activePhase === 'signup'
+      el('p', { class: 'muted' }, !bracket.drawn
         ? 'The draw has not happened yet. Check back once the group stage begins — your fixtures will appear here.'
         : 'No fixture is published for you in the current round. If you were eliminated, your journey ends here — well played.'),
     ));

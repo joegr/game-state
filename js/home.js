@@ -7,7 +7,7 @@
 // The PIN check is just routing convenience, not security: it's a local
 // device lock, not a credential — see js/admin.js.
 
-import { loadTournament, loadPublic } from './config.js';
+import { loadTournament, loadTournamentState } from './config.js';
 import { isSignupOpen } from './stateMachine.js';
 import { el, clear, identityStore } from './util.js';
 import { randomToken, fingerprint } from './identity.js';
@@ -23,16 +23,17 @@ if (localStorage.getItem(ADMIN_PIN)) {
 }
 
 async function boot() {
-  let tournament, pub;
+  let tournament, progress;
   try {
-    [tournament, pub] = await Promise.all([loadTournament(), loadPublic()]);
+    tournament = await loadTournament();
+    ({ progress } = await loadTournamentState(tournament));
   } catch (e) {
     app.append(el('div', { class: 'card danger' }, 'Config error: ' + e.message));
     return;
   }
   document.getElementById('tourney-name').textContent = tournament.name;
   document.title = `${tournament.name} · game-state`;
-  render(tournament, pub);
+  render(tournament, progress);
 }
 
 function footer() {
@@ -41,7 +42,7 @@ function footer() {
     el('a', { href: 'captain.html#/captain' }, 'Captain view'));
 }
 
-function render(tournament, pub) {
+function render(tournament, progress) {
   clear(app);
   const existing = identityStore.load(tournament.name);
 
@@ -58,8 +59,8 @@ function render(tournament, pub) {
   }
 
   // Signup phase over, or every group already full.
-  if (!isSignupOpen(tournament, pub)) {
-    const msg = pub?.full ? 'Registration is full — thanks for your interest!' : 'Registration is not open yet.';
+  if (!isSignupOpen(tournament, progress)) {
+    const msg = progress?.full ? 'Registration is full — thanks for your interest!' : 'Registration is not open yet.';
     app.append(el('div', { class: 'card center hero' }, el('p', { class: 'muted' }, msg)), footer());
     return;
   }

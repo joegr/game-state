@@ -47,7 +47,7 @@ export function ghPutFile(repo, path, content, message, branch = 'main') {
 }
 
 // The public roster (and results ledger) live in a separate, public repo (see
-// config/tournament.json → rosterRepo), fetched at runtime — no submodule, no
+// config/tournament.md → Roster repo), fetched at runtime — no submodule, no
 // local copy to keep in sync. An env override reads a local file instead, for
 // local testing without network access or a real roster repo.
 async function fetchRepoFile(repo, path, envOverride) {

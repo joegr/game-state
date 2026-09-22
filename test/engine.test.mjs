@@ -22,7 +22,11 @@ test('buildDraw: 8 teams → 3 rounds, correct labels, no byes', () => {
 });
 
 test('buildDraw is deterministic for a given seed', () => {
-  assert.deepEqual(buildDraw(teams(8), 'x'), buildDraw(teams(8), 'x'));
+  // createdAt/updatedAt are wall-clock stamps, not derived from the seed — two
+  // real calls can land in different milliseconds, so exclude them here and
+  // compare everything the seed actually determines.
+  const strip = ({ createdAt, updatedAt, ...rest }) => rest;
+  assert.deepEqual(strip(buildDraw(teams(8), 'x')), strip(buildDraw(teams(8), 'x')));
   assert.notDeepEqual(
     buildDraw(teams(8), 'x').rounds[0].matches.map((m) => [m.a, m.b]),
     buildDraw(teams(8), 'y').rounds[0].matches.map((m) => [m.a, m.b]),
