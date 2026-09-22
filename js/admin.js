@@ -142,6 +142,7 @@ function renderConsole() {
   renderInbox();
   if (!drawn) renderRegistration(); else renderQueue();
   if (drawn) renderExport();
+  renderBackup();
   renderDanger();
 
   app.append(el('p', { class: 'muted sm center' }, 'Publish by committing the exported config JSON and pushing — Pages redeploys on push.'));
@@ -305,11 +306,75 @@ function renderExport() {
   ));
 }
 
+// ---- backup & restore ------------------------------------------------------
+//
+// The working state (roster, reports, bracket) lives ONLY in this browser's
+// localStorage, and the captains' public keys exist nowhere else — so clearing
+// site data, switching devices, or a storage eviction would make every future
+// round unsealable and end the tournament. A backup is itself a sealed box to
+// the organizer's OWN public key: safe to store anywhere (repo, chat, disk),
+// restorable only with the organizer private key.
+
+const BACKUP_V = 1;
+
+async function makeBackup() {
+  return seal(JSON.stringify({
+    v: BACKUP_V, tournament: tournament.name, savedAt: new Date().toISOString(), work,
+  }), tournament.organizerPublicKey);
+}
+
+async function readBackup(text) {
+  const tok = (text.match(/[A-Za-z0-9_-]{100,}/g) || [])[0];
+  if (!tok) throw new Error('No backup blob found in that text.');
+  const payload = JSON.parse(await unseal(tok, priv));
+  const w = payload.work;
+  if (!w || !Array.isArray(w.teams) || !Array.isArray(w.reports)) throw new Error('That is not a game-state backup.');
+  return {
+    work: { teams: w.teams, reports: w.reports, matches: w.matches ?? null, seed: w.seed ?? null },
+    savedAt: payload.savedAt || 'unknown date',
+  };
+}
+
+function renderBackup() {
+  const ta = el('textarea', { class: 'input mono', rows: '3', placeholder: 'paste a backup blob to restore' });
+  const file = el('input', { type: 'file', accept: '.txt,.json', class: 'input', onchange: async (e) => { const f = e.target.files[0]; if (f) ta.value = await f.text(); } });
+
+  app.append(el('div', { class: 'card' },
+    el('h3', {}, 'Backup & restore'),
+    el('p', { class: 'muted sm' }, 'This browser is the only copy of the roster, the reports and the bracket. Download a backup after every session — it is sealed to your own organizer key, so it is safe to keep anywhere, and only that key can open it.'),
+    el('button', { class: 'btn', onclick: async (e) => {
+      e.target.disabled = true; e.target.textContent = 'Sealing…';
+      try {
+        const blob = new Blob([await makeBackup() + '\n'], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = el('a', { href: url, download: `game-state-backup-${new Date().toISOString().slice(0, 10)}.txt` });
+        document.body.append(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        e.target.textContent = 'Download backup';
+      } catch (err) { alert('Could not seal the backup: ' + err.message); e.target.textContent = 'Download backup'; }
+      e.target.disabled = false;
+    } }, 'Download backup'),
+    el('hr', {}),
+    el('h4', {}, 'Restore'),
+    el('p', { class: 'muted sm' }, 'Replaces everything on this device with the contents of the backup.'),
+    file, ta,
+    el('button', { class: 'btn ghost', onclick: async () => {
+      try {
+        const { work: restored, savedAt } = await readBackup(ta.value);
+        if (!confirm(`Restore the backup from ${savedAt}? It has ${restored.teams.length} team(s) and ${restored.reports.length} report(s), and REPLACES the current state on this device.`)) return;
+        work = restored; saveWork(); toast(`Restored backup from ${savedAt}.`); render();
+      } catch (err) { alert('Could not restore: ' + (err.message || 'that blob is not readable with this organizer key.')); }
+    } }, 'Restore from backup'),
+  ));
+}
+
 function renderDanger() {
   app.append(el('details', { class: 'card' }, el('summary', {}, 'Danger zone'),
     el('div', { class: 'row' },
       el('button', { class: 'btn ghost', onclick: () => {
-        if (confirm('Discard the local working state (teams, reports, bracket) on this device? Your key stays.')) { work = blankWork(); saveWork(); toast('Working state cleared.'); render(); }
+        if (!confirm('Discard the local working state (teams, reports, bracket) on this device? Your key stays.')) return;
+        if (!confirm('This cannot be undone and there is no other copy. Download a backup first if you have not. Really reset?')) return;
+        work = blankWork(); saveWork(); toast('Working state cleared.'); render();
       } }, 'Reset tournament state'),
     )));
 }

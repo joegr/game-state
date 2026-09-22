@@ -62,7 +62,8 @@ tools/  (OPTIONAL CLI — the console does all this in the browser)
 ├─ decrypt-signups.mjs committed signups/ blobs → state/teams.json
 └─ advance.mjs         draw · result · tally · sim · purge · status
 
-test/   node:test suite (npm test) — engine + crypto
+test/       node:test suite (npm test) — engine + crypto
+features/   Gherkin spec of the intended behavior, by feature — docs, not run by CI
 .github/workflows/
 ├─ deploy.yml   publish the static site to GitHub Pages (on push)
 └─ engine.yml   OPTIONAL manual workflow_dispatch to run the CLI engine in CI
@@ -86,7 +87,10 @@ No build step — vanilla ES modules, served as-is.
    never committed. (`node keygen.mjs --json > organizer.keys.json` is gitignored
    and can be uploaded directly in `admin.html`.)
 3. **Configure the tournament** in `config/tournament.json`: `name`, `teamCount`,
-   and the `phases` with their UTC `start` times.
+   and the `phases` with their UTC `start` times. The shipped dates are
+   placeholders — set real ones, since the stage is a pure function of the clock.
+   Until you complete steps 2 and 3, the site deliberately shows "Registration is
+   not open yet" rather than accepting entries nobody could decrypt.
 4. **Enable Pages:** *Settings → Pages → Source = GitHub Actions*, then push.
    Registration opens automatically when the clock passes the `signup` phase.
 
@@ -112,6 +116,13 @@ token, no server.
 5. **Publish** — hit **Prepare exports**, download `public.json`, `bracket.json`,
    `queue.json`, drop them into `config/`, and `git commit && git push`. Pages
    redeploys on push and the public bracket + captain views update.
+6. **Back up** — hit **Download backup** before you close the tab. The console's
+   working state (roster, score reports, bracket) lives *only* in this browser's
+   localStorage, and the captains' public keys exist nowhere else — without a
+   backup, clearing site data or switching devices makes every later round
+   unsealable and ends the tournament. The backup is itself a sealed box to your
+   own organizer public key, so it is safe to keep anywhere (repo, chat, disk);
+   only your private key can open it. **Restore** puts it back on any device.
 
 The captain's side (`captain.html`): register → save your key + get your 4-char
 code → later, load your key to see your next fixture and **report your score**,
