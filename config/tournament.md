@@ -9,8 +9,8 @@ _simple state-based tournaments_
 - Roster repo: joegr/game-state-roster
 - Tentative repo: joegr/game-state-tentative-scores
 - Active phase: groups
-- Draw seed: (none)
-- Round: (none)
+- Draw seed: The Autumn Gauntlet:1790189694152
+- Round: 1
 
 ## Phases
 
