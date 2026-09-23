@@ -46,7 +46,11 @@ export async function hashToken(token) {
 // function: signup displays the code derived from its token, and the organizer
 // derives the same code when the entry is ingested. Keeping this in one module
 // prevents the two paths from drifting apart.
-const CODE_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+//
+// No I, O, 0 or 1: codes are read off screens and typed back in, and those
+// pairs look alike in most fonts. That leaves exactly 32 characters, so
+// `byte % 32` is also perfectly uniform (256 is a multiple of 32).
+export const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export async function generateCode(input) {
   const digest = new Uint8Array(await subtle.digest('SHA-256', new TextEncoder().encode(input)));
   let code = '';

@@ -63,6 +63,17 @@ jobs:
           REPO="$repo" node -e 'require("fs").writeFileSync("js/submit-config.js",
             "export const SUBMIT = { repo: " + JSON.stringify(process.env.REPO) + ", token: " + JSON.stringify(process.env.SUBMIT_TOKEN) + " };\n")'
           echo "submissions connected to $repo"
+      # Stamp every script and stylesheet reference in the PUBLISHED copy with
+      # this commit, so a browser always loads one matching set of files per
+      # deploy. Without it, the 10-minute Pages cache can hand a visitor a new
+      # module next to an old one it imports, and the page breaks until the
+      # cache expires. Nothing in git changes.
+      - name: Version this deploy's files
+        run: |
+          v="${GITHUB_SHA::8}"
+          sed -i -E "s#(from |import\()'(\./[A-Za-z-]+\.js)'#\1'\2?v=$v'#g" js/*.js
+          sed -i -E "s#(src=\"js/[A-Za-z-]+\.js)\"#\1?v=$v\"#g; s#(href=\"css/style\.css)\"#\1?v=$v\"#g" *.html
+          echo "stamped v=$v: $(grep -rhoE "\?v=$v" js/ *.html | wc -l) references"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  randomToken, hashToken, fingerprint, randomPin, pinHash, isPin, isCode,
+  randomToken, hashToken, fingerprint, randomPin, pinHash, isPin, isCode, CODE_ALPHABET,
 } from '../js/identity.js';
 
 test('randomToken: distinct on every call', () => {
@@ -22,6 +22,12 @@ test('fingerprint: 4 uppercase alphanumerics, deterministic, input-specific', as
   assert.match(fa, /^[A-Z0-9]{4}$/);
   assert.equal(fa, await fingerprint(a));
   assert.notEqual(fa, await fingerprint(b));
+});
+
+test('team codes never use the look-alikes I, O, 0 or 1', async () => {
+  assert.equal(CODE_ALPHABET.length, 32);
+  assert.doesNotMatch(CODE_ALPHABET, /[IO01]/);
+  for (let i = 0; i < 300; i++) assert.doesNotMatch(await fingerprint(randomToken()), /[IO01]/);
 });
 
 test('a token cannot be recovered from its hash or its team code', async () => {

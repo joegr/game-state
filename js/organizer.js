@@ -482,6 +482,10 @@ function publishPlan() {
     const link = out.url ? el('p', { class: 'sm' }, el('a', { href: out.url, target: '_blank', rel: 'noopener' }, 'The run on GitHub')) : null;
     if (out.timeout) return { kind: 'error', text: 'The publish workflow has not finished yet. Check the run, then Reload.', extra: link };
     if (out.verdict?.startsWith('PUBLISHED')) {
+      // A reset clears the private queue through an inbox entry, and the
+      // publish workflow can't start a batch. Start it from here so the queue
+      // is empty now, not at the hourly run.
+      if (p.plan.clearPrivate) await gh.dispatch(live.tournament.tentativeRepo, 'batch.yml', {}).catch(() => {});
       return { kind: 'ok', text: `${out.verdict.replace(/^PUBLISHED: /, 'Published ').replace(/[.:]+$/, '')}. The public pages update within a few minutes (the site redeploys, and GitHub caches the roster files briefly).`, extra: link };
     }
     if (out.verdict) return { kind: 'error', text: out.verdict.replace(/^REFUSED: /, 'Refused: '), extra: link };
