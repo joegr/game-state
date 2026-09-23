@@ -22,10 +22,10 @@ Feature: Organizer authority
     @critical
     Scenario: Confirming a stage change
       When the organizer runs a stage change (close, reopen, draw, advance, reset)
-      Then the CLI prints exactly what will be published and a fingerprint of that plan
-      And nothing is published unless the organizer types the fingerprint back
+      Then the bar or CLI shows exactly what will be published and a fingerprint of that plan
+      And nothing is published unless the organizer confirms the fingerprint
       When they do
-      Then the CLI dispatches the stage workflow with that fingerprint
+      Then it dispatches the stage workflow with that fingerprint
 
     @critical
     Scenario: The plan changed after confirmation
@@ -47,13 +47,14 @@ Feature: Organizer authority
       Then it writes results.md, then roster.md, then tournament.md last
       And a reader never sees a stage that the published files don't support yet
 
-  Rule: gh push access is the credential; the bar is a view
+  Rule: The organizer's GitHub token is the credential; the bar acts with it
 
     Scenario: The organizer bar
-      Given the organizer has set a PIN on this device
+      Given the organizer has set a PIN on this device and connected a fine-grained GitHub token
       Then the bar appears on every page, stays unlocked across the tab, and opens from #organizer
-      And it reads the private queue with the organizer's own read-only token
-      And every action in it is a command to copy, never a write
+      And it reads and writes the private queue with the organizer's own token, compare-and-swap
+      And private actions (admit, accept, reject, unlock) write directly to the tentative repo
+      And stage changes (close, draw, advance, reset) dispatch the stage workflow after fingerprint confirmation
       And the PIN protects nothing: it is a view toggle, and the interface says so
 
     Scenario: Controls the organizer has
