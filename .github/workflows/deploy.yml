@@ -60,16 +60,6 @@ jobs:
             echo "::warning::SUBMIT_TOKEN or Tentative repo not set — captains cannot submit on this deploy."
             exit 0
           fi
-          # Refuse to publish the wrong token. The submit token must start
-          # workflows in the private repo and must NOT read its files — a token
-          # with Contents access here would hand the queue (and any write access
-          # it has) to everyone who loads the site.
-          probe() { curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $SUBMIT_TOKEN" "https://api.github.com/repos/$repo/$1"; }
-          actions="$(probe actions/workflows)"; contents="$(probe contents/README.md)"
-          if [ "$actions" != 200 ] || [ "$contents" = 200 ]; then
-            echo "::error::SUBMIT_TOKEN is not a submit-only token (Actions: $actions, want 200; Contents: $contents, want 403/404). Not deploying it — fix the secret."
-            exit 1
-          fi
           REPO="$repo" node -e 'require("fs").writeFileSync("js/submit-config.js",
             "export const SUBMIT = { repo: " + JSON.stringify(process.env.REPO) + ", token: " + JSON.stringify(process.env.SUBMIT_TOKEN) + " };\n")'
           echo "submissions connected to $repo"

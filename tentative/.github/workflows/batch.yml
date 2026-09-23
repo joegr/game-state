@@ -25,7 +25,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # ref: main, NOT the default. The default is the commit this run was
+      # dispatched at, and a batch queued behind another would then fold a
+      # stale queue — re-applying entries the previous batch already took.
       - uses: actions/checkout@v4
+        with:
+          ref: main
       - uses: actions/checkout@v4
         with:
           repository: __APP_REPO__
@@ -33,27 +38,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Fold the inbox into the queue
-        id: fold
+      - name: Fold the inbox into the queue and commit
         env:
           GH_TOKEN: ${{ github.token }}
           APP_REPO: __APP_REPO__
           TENTATIVE_REPO: ${{ github.repository }}
           TENTATIVE_DIR: .
-        run: node .app/tools/batch.mjs
-      - name: Commit
         run: |
           git config user.name "game-state batch"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add signups.md scores.md attempts.md
-          [ -f rejected.md ] && git add rejected.md
-          git add -A inbox 2>/dev/null || true
-          if git diff --cached --quiet; then echo "nothing changed"; exit 0; fi
-          git commit -q -m "batch: ${{ steps.fold.outputs.message }}"
-          # Intake may have added inbox files meanwhile. Those are new paths, so
-          # a rebase is always clean.
+          # If the push loses a race (intake adding inbox files meanwhile), start
+          # over from the new tip and fold again, rather than rebasing a fold
+          # that was computed from an older queue.
           for i in 1 2 3 4 5; do
+            [ "$i" = 1 ] || { git fetch -q origin main && git reset -q --hard origin/main; }
+            out="$(node .app/tools/batch.mjs)"
+            echo "$out"
+            msg="${out%%$'\n'*}"
+            git add -A signups.md scores.md attempts.md
+            git add -A inbox 2>/dev/null || true
+            if [ -f rejected.md ]; then git add rejected.md; fi
+            if git diff --cached --quiet; then echo "nothing changed"; exit 0; fi
+            git commit -q -m "batch: $msg"
             git push -q && exit 0
-            git pull -q --rebase
           done
           exit 1
