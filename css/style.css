@@ -155,11 +155,13 @@ h4 { margin: 12px 0 6px; font-size: 14px; }
 }
 
 .banner { border-left: 3px solid var(--warn); padding-left: 10px; margin: 0 0 14px; }
-.cmd { margin: 10px 0; }
-.cmd .row { margin: 4px 0 0; flex-wrap: nowrap; align-items: stretch; }
-.cmd-text { flex: 1; margin: 0; overflow-x: auto; white-space: pre; word-break: normal; }
-
-@media (max-width: 520px) {
-  .cmd .row { flex-wrap: wrap; }
-  .cmd-text { flex-basis: 100%; }
-}
+.org-bar .match .row { margin: 8px 0 0; }
+.org-bar .match .row .input { width: auto; flex: 1; min-width: 0; margin: 0; padding: 6px 8px; }
+.org-bar .notice { border-left: 3px solid var(--good); }
+.org-bar .notice.error { border-left-color: var(--danger); }
+.org-bar .notice.busy { border-left-color: var(--warn); }
+.org-bar .plan { border: 2px solid var(--accent); }
+.org-bar .plan .blob { white-space: pre-wrap; word-break: normal; }
+.org-bar strong.big { font-size: 24px; letter-spacing: .12em; }
+.btn.danger { background: var(--danger); color: #fff; }
+.btn.ghost.danger { background: transparent; color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); }

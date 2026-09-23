@@ -365,3 +365,68 @@ test('validateResult: the winner must have played and must have the higher score
   assert.equal(validateResult(s, res(m.id, m.a, 2, 2)).ok, false);
   assert.equal(validateResult(null, res(m.id, m.a)).ok, false);
 });
+
+// ---- the organizer's private actions (shared by the bar and the CLI) ---------------------
+
+test('organizer decisions: admit, reject, confirm, decide, take back — gated and compare-and-swap', async () => {
+  const {
+    decideAdmit, decideUnadmit, decideRejectSignup, decideConfirm, decideResult, decideUnconfirm, decideRejectScore, decideRepin,
+  } = await import('../js/orgActions.js');
+  const sign = (fp) => ({ fp, tokenHash: `h${fp}`, pinHash: 'p', submittedAt: 't' });
+  const q0 = { signups: codes(3).map(sign), scores: [], attempts: [], admitted: [], accepted: [], inboxNames: [], admittedSha: 'A1', acceptedSha: 'B1' };
+  const reg = { record: rec(T()), queue: q0 };
+
+  assert.equal(decideAdmit(reg, []).ok, false);
+  assert.match(decideAdmit(reg, ['ZZZZ']).error, /Not waiting: ZZZZ/);
+  const a = decideAdmit(reg, ['t000']);
+  assert.ok(a.ok);
+  assert.equal(a.write.path, 'admitted.md');
+  assert.equal(a.write.sha, 'A1');
+  assert.match(a.write.content, /T000/);
+  assert.doesNotMatch(a.write.content, /T001/);
+  assert.match(decideAdmit(reg, 'all').message, /T000 T001 T002/);
+  const full = { record: rec(T({ teamCount: 2 })), queue: q0 };
+  assert.match(decideAdmit(full, 'all').message, /1 not admitted — capacity/);
+
+  const admittedQ = { ...q0, admitted: [{ fp: 'T000', tokenHash: 'hT000', registeredAt: 't' }] };
+  assert.match(decideRejectSignup({ record: reg.record, queue: admittedQ }, 'T000').error, /un-admit it first/);
+  assert.equal(decideRejectSignup(reg, 'T001').entry.kind, 'org-reject-signup');
+  assert.ok(decideUnadmit({ record: reg.record, queue: admittedQ }, 'T000').ok);
+  assert.equal(decideConfirm(reg, 'all').ok, false, 'no score accepting during registration');
+
+  // Round 1 of four teams.
+  const t = T({ activePhase: 'knockout', drawSeed: 's', round: 1 });
+  const record = rec(t, codes(4));
+  const [m1, m2] = record.state.rounds[0].matches;
+  const scores = [
+    { matchId: m1.id, reporterFp: m1.a, myScore: 3, oppScore: 1, submittedAt: 't' },
+    { matchId: m1.id, reporterFp: m1.b, myScore: 1, oppScore: 3, submittedAt: 't' },
+    { matchId: m2.id, reporterFp: m2.a, myScore: 2, oppScore: 0, submittedAt: 't' },
+    { matchId: m2.id, reporterFp: m2.b, myScore: 2, oppScore: 1, submittedAt: 't' },
+  ];
+  const rq = { ...q0, signups: codes(4).map(sign), scores };
+  const round = { record, queue: rq };
+  assert.match(decideConfirm(round, [m2.id]).error, /disputed/);
+  const c = decideConfirm(round, 'all');
+  assert.ok(c.ok);
+  assert.equal(c.write.sha, 'B1');
+  assert.match(c.message, new RegExp(`${m1.id} → ${m1.a} 3-1`));
+  assert.match(c.message, /1 match\(es\) left/);
+
+  assert.match(decideResult(round, m2.id, 'T999', 2, 1).error, /did not play|not in/i);
+  assert.equal(decideResult(round, m2.id, m2.a, 1, 1).ok, false, 'a tie is not a result');
+  const later = record.state.rounds[1].matches[0].id;
+  assert.match(decideResult(round, later, m2.a, 2, 1).error, /not open/);
+  const d = decideResult(round, m2.id, m2.b, 2, 1);
+  assert.ok(d.ok);
+  assert.match(d.message, /decided by you/);
+
+  const acceptedQ = { ...rq, accepted: [res(m1.id, m1.a, 3, 1)] };
+  assert.match(decideConfirm({ record, queue: acceptedQ }, [m1.id]).error, /already accepted/);
+  assert.ok(decideUnconfirm({ record, queue: acceptedQ }, m1.id).ok);
+  const published = { record: rec(t, codes(4), [res(m1.id, m1.a, 3, 1)]), queue: acceptedQ };
+  assert.match(decideUnconfirm(published, m1.id).error, /already published/);
+  assert.equal(decideRejectScore(round, m2.id).entry.kind, 'org-reject-score');
+  assert.match(decideRepin(round, 'ZZZZ', 'x').error, /No registration/);
+  assert.equal(decideRepin(round, 'T000', 'x').entry.pinHash, 'x');
+});

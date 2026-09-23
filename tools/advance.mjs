@@ -18,10 +18,14 @@
 
 import { createInterface } from 'node:readline/promises';
 import {
-  gate, validateResult, computeQueue, roundOpenMatches, advanceCheck, currentPhaseLabel,
+  gate, computeQueue, roundOpenMatches, advanceCheck, currentPhaseLabel,
   formatAdmittedMd, formatAcceptedMd, formatSignupsMd, formatScoresMd, formatAttemptsMd, pruneScores, MAX_PIN_ATTEMPTS,
 } from '../js/engine.js';
 import { formatEntry, entryName, describeName, attemptCount } from '../js/pipeline.js';
+import {
+  decideAdmit, decideUnadmit, decideRejectSignup, decideConfirm, decideResult, decideUnconfirm,
+  decideRejectScore, decideUnlock, decideRepin,
+} from '../js/orgActions.js';
 import { pinHash, randomPin } from '../js/identity.js';
 import { loadConfig, loadPublic, loadQueue, rand } from './context.mjs';
 import { p, gh, ghRead, tentativeCreate, tentativeWrite, tentativeRepoName, triggerWorkflow } from './lib.mjs';
@@ -150,134 +154,29 @@ function rejected() {
   for (const r of q.rejected.slice(-(Number(pos[1]) || 20))) console.log(`  ${r.at}  ${r.entry}\n      ${r.reason}`);
 }
 
-// ---- accept: teams (private until a stage change publishes them) ------------------------------
+// ---- accept: teams and scores (private until a stage change publishes them) -----------------------
+//
+// The decisions live in js/orgActions.js, shared with the organizer bar. Here
+// they are carried out with gh: a compare-and-swap write, or an inbox entry
+// plus a batch request.
 
-function admit() {
-  const x = load();
-  must('signup:admit', x.record);
-  const q = needQueue(x);
-  let waiting = q.signups.filter((s) => !q.admitted.some((a) => a.fp === s.fp));
-  const codes = pos.slice(1).map((c) => c.toUpperCase());
-  if (codes.length) {
-    const missing = codes.filter((c) => !waiting.some((s) => s.fp === c));
-    if (missing.length) refuse(`Not waiting: ${missing.join(', ')}. (\`queue\` shows who is; brand-new registrations appear after the next batch.)`);
-    waiting = waiting.filter((s) => codes.includes(s.fp));
-  } else if (!has('--all')) refuse(`Name the teams, or --all. Waiting: ${waiting.map((s) => s.fp).join(' ') || '(nobody)'}`);
-  if (!waiting.length) { console.log('Nobody is waiting.'); return; }
-  const room = x.record.progress.capacity - q.admitted.length;
-  if (room <= 0) refuse(`Admitted is at capacity (${x.record.progress.capacity}).`);
-  const taking = waiting.slice(0, room);
-  const next = [...q.admitted, ...taking.map((s) => ({ fp: s.fp, tokenHash: s.tokenHash, registeredAt: s.submittedAt }))];
-  tentativeWrite(tournament, 'admitted.md', formatAdmittedMd(next), `admit: ${taking.map((s) => s.fp).join(' ')}`, q.admittedSha);
-  console.log(`Admitted ${taking.map((s) => s.fp).join(' ')} (${next.length}/${x.record.progress.capacity}). Private until you \`close\` or \`draw\`.`);
-  if (taking.length < waiting.length) console.log(`${waiting.length - taking.length} not admitted — capacity reached.`);
+function carryOut(d) {
+  if (!d.ok) refuse(d.error);
+  if (d.write) tentativeWrite(tournament, d.write.path, d.write.content, d.write.message, d.write.sha);
+  if (d.entry) orgEntry(d.entry);
+  console.log(d.message);
+  if (d.batch) requestBatch(d.message.split(';')[0]);
 }
+const ctx = () => { const x = load(); return { record: x.record, queue: needQueue(x) }; };
 
-function unadmit() {
-  const x = load();
-  must('signup:admit', x.record);
-  const q = needQueue(x);
-  const fp = (pos[1] || '').toUpperCase();
-  if (!q.admitted.some((a) => a.fp === fp)) refuse(`${fp || '(none given)'} is not admitted.`);
-  tentativeWrite(tournament, 'admitted.md', formatAdmittedMd(q.admitted.filter((a) => a.fp !== fp)), `unadmit: ${fp}`, q.admittedSha);
-  console.log(`${fp} is back in the waiting list.${x.record.roster.some((t) => t.fp === fp) ? ' It stays on the published roster until the next close/draw republishes it.' : ''}`);
-}
+const admit = () => carryOut(decideAdmit(ctx(), has('--all') ? 'all' : pos.slice(1)));
+const unadmit = () => carryOut(decideUnadmit(ctx(), pos[1]));
+const rejectSignup = () => carryOut(decideRejectSignup(ctx(), pos[1], opt('--note')));
+const confirm = () => carryOut(decideConfirm(ctx(), has('--all') ? 'all' : pos.slice(1)));
+const result = () => carryOut(decideResult(ctx(), pos[1], pos[2], pos[3], pos[4]));
+const unconfirm = () => carryOut(decideUnconfirm(ctx(), pos[1]));
+const rejectScore = () => carryOut(decideRejectScore(ctx(), pos[1], pos[2], opt('--note')));
 
-function rejectSignup() {
-  const x = load();
-  must('signup:reject', x.record);
-  const q = needQueue(x);
-  const fp = (pos[1] || '').toUpperCase();
-  if (!fp) refuse('Usage: reject-signup CODE [--note "reason"]');
-  if (q.admitted.some((a) => a.fp === fp)) refuse(`${fp} is admitted — \`unadmit ${fp}\` first.`);
-  if (!q.signups.some((s) => s.fp === fp) && !q.inboxNames.some((n) => describeName(n)?.team === fp)) refuse(`No registration for ${fp}.`);
-  orgEntry({ kind: 'org-reject-signup', team: fp, note: opt('--note') });
-  console.log(`Rejection of ${fp} queued.`);
-  requestBatch(`reject ${fp}`);
-}
-
-// ---- accept: scores (private until `advance` publishes the round) ------------------------------
-
-function writeAccepted(q, rows, message) {
-  tentativeWrite(tournament, 'accepted.md', formatAcceptedMd(rows), message, q.acceptedSha);
-}
-
-function confirm() {
-  const x = load();
-  must('score:accept', x.record);
-  const q = needQueue(x);
-  const open = roundOpenMatches(x.record);
-  const cq = computeQueue(x.record.state, pruneScores(q.scores, x.record));
-  const agreed = Object.entries(cq).filter(([id, v]) => v.status === 'agreed' && open.has(id) && !q.accepted.some((r) => r.matchId === id));
-  let ids;
-  if (has('--all')) ids = agreed.map(([id]) => id);
-  else {
-    const id = pos[1];
-    if (!id) refuse(`Usage: confirm <matchId> | confirm --all. Agreed and not yet accepted: ${agreed.map(([i]) => i).join(' ') || '(none)'}`);
-    if (!open.has(id)) refuse(`${id} is not open in round ${x.record.round}.`);
-    if (q.accepted.some((r) => r.matchId === id)) refuse(`${id} is already accepted (\`unconfirm ${id}\` to take it back).`);
-    if (!cq[id]) refuse(`Nothing submitted for ${id}.`);
-    if (cq[id].status !== 'agreed') refuse(`${id} is ${cq[id].status}, not agreed — decide it with \`result\`.`);
-    ids = [id];
-  }
-  if (!ids.length) { console.log('No agreed results waiting.'); return; }
-  const rows = [...q.accepted];
-  for (const id of ids) {
-    const v = cq[id];
-    const r = { matchId: id, winner: v.winner, scoreWinner: Math.max(v.scoreA, v.scoreB), scoreLoser: Math.min(v.scoreA, v.scoreB), confirmedAt: new Date().toISOString() };
-    const ok = validateResult(x.record.state, r);
-    if (!ok.ok) refuse(`${id}: ${ok.error} Nothing was accepted.`);
-    rows.push(r);
-    console.log(`Accepted ${id} → ${r.winner} ${r.scoreWinner}-${r.scoreLoser}`);
-  }
-  writeAccepted(q, rows, `accept: ${ids.join(' ')}`);
-  afterAccept(x.record, rows);
-}
-
-function result() {
-  const [, id, w, sW, sL] = pos;
-  if (!id || !w || sW == null || sL == null) refuse('Usage: result <matchId> <winnerCode> <scoreWinner> <scoreLoser>   (decide a match yourself: disputes, walkovers)');
-  const x = load();
-  must('score:accept', x.record);
-  const q = needQueue(x);
-  if (!roundOpenMatches(x.record).has(id)) refuse(`${id} is not open in round ${x.record.round}.`);
-  if (q.accepted.some((r) => r.matchId === id)) refuse(`${id} is already accepted — \`unconfirm ${id}\` first.`);
-  const r = { matchId: id, winner: w.toUpperCase(), scoreWinner: Number(sW), scoreLoser: Number(sL), confirmedAt: new Date().toISOString() };
-  const v = validateResult(x.record.state, r);
-  if (!v.ok) refuse(`${id}: ${v.error}`);
-  const rows = [...q.accepted, r];
-  writeAccepted(q, rows, `result: ${id} -> ${r.winner}`);
-  console.log(`Accepted ${id} → ${r.winner} ${r.scoreWinner}-${r.scoreLoser} (decided by you).`);
-  afterAccept(x.record, rows);
-}
-
-function unconfirm() {
-  const x = load();
-  must('score:accept', x.record);
-  const q = needQueue(x);
-  const id = pos[1];
-  if (!q.accepted.some((r) => r.matchId === id)) refuse(`${id || '(none given)'} is not accepted.`);
-  if (x.record.results.some((r) => r.matchId === id)) refuse(`${id} is already published — it can't be taken back.`);
-  writeAccepted(q, q.accepted.filter((r) => r.matchId !== id), `unaccept: ${id}`);
-  console.log(`${id} is back in the queue.`);
-}
-
-function afterAccept(record, accepted) {
-  const c = advanceCheck(record, accepted);
-  console.log(c.ok ? `Round ${record.round} is fully accepted. \`advance\` to publish it.` : `${c.missing?.length ?? 0} match(es) left in round ${record.round}.`);
-}
-
-function rejectScore() {
-  const x = load();
-  must('score:reject', x.record);
-  const id = pos[1];
-  const fp = pos[2]?.toUpperCase();
-  if (!id) refuse('Usage: reject-score <matchId> [CODE]   (clears submissions so the captains resubmit)');
-  if (!roundOpenMatches(x.record).has(id)) refuse(`${id} is not open in round ${x.record.round}.`);
-  orgEntry({ kind: 'org-reject-score', match: id, team: fp, note: opt('--note') });
-  console.log(`Clearing ${fp ? `${fp}'s` : 'both'} submission(s) for ${id} — queued.`);
-  requestBatch(`reject-score ${id}`);
-}
 
 // ---- stage changes: plan → your confirmation → stage.yml -----------------------------------------
 
@@ -322,24 +221,16 @@ function execWatch() {
 
 // ---- lockout -----------------------------------------------------------------------------------------
 
-function unlock() {
-  const fp = (pos[1] || '').toUpperCase();
-  if (!fp) refuse('Usage: unlock CODE');
-  orgEntry({ kind: 'org-unlock', team: fp });
-  console.log(`Unlock of ${fp} queued.`);
-  requestBatch(`unlock ${fp}`);
-}
+const unlock = () => carryOut(decideUnlock(null, pos[1]));
 
 async function repin() {
   const fp = (pos[1] || '').toUpperCase();
-  if (!fp) refuse('Usage: repin CODE');
-  const q = needQueue(load());
-  if (!q.signups.some((s) => s.fp === fp)) refuse(`No registration for ${fp}.`);
   const pin = randomPin();
-  orgEntry({ kind: 'org-repin', team: fp, pinHash: await pinHash(fp, pin) });
-  console.log(`New PIN for ${fp}: ${pin}\nGive it to that captain privately. It takes effect at the next batch; the old PIN stops working then.`);
-  requestBatch(`repin ${fp}`);
+  const d = decideRepin(ctx(), fp, fp ? await pinHash(fp, pin) : '');
+  carryOut(d);
+  console.log(`New PIN for ${fp}: ${pin} — give it to that captain privately.`);
 }
+
 
 // ---- ops ------------------------------------------------------------------------------------------------
 

@@ -2,9 +2,9 @@ name: stage
 
 # The ONLY thing that writes the public record (roster.md, results.md) and the
 # tournament's stage (config/tournament.md). Nothing triggers it automatically:
-# it runs only when the organizer dispatches it, and `node tools/advance.mjs`
-# does that only after showing the organizer the exact plan and getting their
-# confirmation. The confirmed plan's fingerprint is passed in `expect`, and the
+# it runs only when the organizer dispatches it, and the organizer bar (or
+# `node tools/advance.mjs`) does that only after showing the organizer the
+# exact plan and getting their confirmation. The confirmed plan's fingerprint is passed in `expect`, and the
 # run refuses if the live files would now produce any other plan.
 #
 # Optional second confirmation, inside GitHub: add yourself as a required
@@ -56,6 +56,7 @@ jobs:
         with:
           node-version: '20'
       - name: Re-plan, check against the confirmed plan, publish
+        id: stage
         env:
           GH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
           INPUT_ACTION: ${{ inputs.action }}
@@ -63,3 +64,8 @@ jobs:
           INPUT_SEED: ${{ inputs.seed }}
           INPUT_LEAVE_PENDING: ${{ inputs.leave_pending }}
         run: node tools/stage.mjs
+      # The outcome as a step NAME ("PUBLISHED: …" / "REFUSED: …"), which the
+      # organizer bar reads from the jobs list to tell you what happened.
+      - name: ${{ steps.stage.outputs.verdict }}
+        if: always() && steps.stage.outputs.verdict != ''
+        run: 'true'

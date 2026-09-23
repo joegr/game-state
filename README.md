@@ -107,7 +107,7 @@ every push.
    |---|---|---|---|
    | `SUBMIT_TOKEN` | tentative only | **Actions: read & write**, nothing else | secret in `game-state`. deploy.yml writes it into the **public site**, so treat it as public |
    | `PUBLISH_TOKEN` | game-state, game-state-roster, tentative | **Contents: read & write** | secret in `game-state` |
-   | organizer read token | tentative only | **Contents: read** | pasted into the organizer bar, stays in your browser |
+   | organizer token | tentative: **Contents: read & write**, **Actions: read & write**; game-state: **Actions: read & write** | pasted into the organizer bar, stays in your browser. It is what lets the bar accept and start stage changes |
 
    Your own `gh` login needs push access to all three repos.
 4. **Optional GitHub-side approval.** Under *Settings → Environments →
@@ -121,8 +121,20 @@ every push.
 
 ## Run a tournament
 
-The **⚙ Organizer** bar (every page, bottom right; `#organizer` opens it)
-shows the queue with a copy button beside each command. Every command:
+Everything is done from the **⚙ Organizer** bar (every page, bottom right;
+`#organizer` opens it), with your organizer token:
+
+- **Teams:** Admit, Reject, Admit all, Un-admit.
+- **Scores**, side by side: Accept, Accept all agreed, Take it back, Clear
+  both so they resubmit, Decide it yourself (disputes, walkovers).
+- **PINs:** Unlock, Issue a new PIN (shown once, in the bar).
+- **Pipeline:** Batch now; what the batch rejected.
+- **Stage changes:** each button computes the exact plan and its
+  fingerprint and shows it; **Confirm & publish** starts `stage.yml`, and the
+  bar follows the run and tells you whether it published or refused.
+
+The bar and the CLI make the same decisions (`js/orgActions.js`,
+`planTransition`). The CLI is the same console in a terminal:
 
 ```bash
 node tools/advance.mjs status            # stage, public vs private, what's allowed now

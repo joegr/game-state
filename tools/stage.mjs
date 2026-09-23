@@ -49,18 +49,21 @@ async function main() {
   const expect = String(process.env.INPUT_EXPECT || '').trim();
   const opts = { seed: process.env.INPUT_SEED || undefined, leavePending: process.env.INPUT_LEAVE_PENDING === 'true' };
   const summary = (s) => process.env.GITHUB_STEP_SUMMARY && appendFileSync(process.env.GITHUB_STEP_SUMMARY, s + '\n');
+  // stage.yml names a step after this, and the organizer bar reads it.
+  const verdict = (v) => process.env.GITHUB_OUTPUT && appendFileSync(process.env.GITHUB_OUTPUT, `verdict=${v.replace(/[\r\n]+/g, ' ')}\n`);
 
   const p = await planFor(action, opts);
-  if (!p.ok) { console.log(`::error title=REFUSED::${p.error}`); summary(`**Refused** — ${p.error}`); process.exit(1); }
-  if (!expect) { console.log('::error title=REFUSED::No confirmed plan fingerprint. Stage changes are started from `node tools/advance.mjs`, which shows the plan and asks you to confirm it.'); process.exit(1); }
+  if (!p.ok) { console.log(`::error title=REFUSED::${p.error}`); summary(`**Refused** — ${p.error}`); verdict(`REFUSED: ${p.error}`); process.exit(1); }
+  if (!expect) { const m = 'No confirmed plan fingerprint. Stage changes start from the organizer bar (or the CLI), which shows the plan and asks you to confirm it.'; console.log(`::error title=REFUSED::${m}`); verdict(`REFUSED: ${m}`); process.exit(1); }
   if (p.fingerprint !== expect) {
-    const m = `The plan changed after you confirmed it (confirmed ${expect}, now ${p.fingerprint}) — something was accepted or published in between. Nothing was written. Re-run the command to see the new plan.`;
-    console.log(`::error title=REFUSED::${m}`); summary(`**Refused** — ${m}`); process.exit(1);
+    const m = `The plan changed after you confirmed it (confirmed ${expect}, now ${p.fingerprint}) — something was accepted or published in between. Nothing was written. Open the stage change again to see the new plan.`;
+    console.log(`::error title=REFUSED::${m}`); summary(`**Refused** — ${m}`); verdict(`REFUSED: ${m}`); process.exit(1);
   }
   console.log(`Plan ${p.fingerprint} (${action}), as confirmed:`);
   for (const line of p.plan.summary) console.log(`  ${line}`);
   executePlan(p);
   console.log(`::notice title=PUBLISHED::${action} (${p.fingerprint}) published.`);
+  verdict(`PUBLISHED: ${action} (${p.fingerprint}) — ${p.plan.summary[0]?.trim() || 'done'}`);
   summary(`**Published** \`${action}\` (${p.fingerprint})\n\n${p.plan.summary.map((l) => `- ${l.trim()}`).join('\n')}`);
 }
 
