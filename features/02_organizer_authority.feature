@@ -51,11 +51,34 @@ Feature: Organizer authority
 
     Scenario: The organizer bar
       Given the organizer has set a PIN on this device and connected a fine-grained GitHub token
-      Then the bar appears on every page, stays unlocked across the tab, and opens from #organizer
+      Then the bar is available on every page, stays unlocked across the tab, and opens from #organizer
       And it reads and writes the private queue with the organizer's own token, compare-and-swap
       And private actions (admit, accept, reject, unlock) write directly to the tentative repo
       And stage changes (close, draw, advance, reset) dispatch the stage workflow after fingerprint confirmation
       And the PIN protects nothing: it is a view toggle, and the interface says so
+
+    Scenario: Only the organizer's device shows the bar
+      Given a device where no organizer PIN has been set
+      Then no organizer button appears on any page
+      And the bar can only be reached by opening #organizer
+
+    @critical
+    Scenario: One device at a time
+      Given the bar is open on one device
+      When it is opened on another device
+      Then the second device is told the bar is in use, on what device and since when
+      And it reads nothing from the private queue and can take no action
+      And a device that lost the bar to another is refused before its next action writes anything
+
+    Scenario: Releasing the bar
+      When the organizer presses Close
+      Then the bar is released and another device may open it
+      Given a device holds the bar but has been idle for 15 minutes
+      Then its hold lapses, so a lost or crashed device never locks the organizer out
+
+    Scenario: Confirmations work in every browser
+      Given a browser that suppresses confirmation dialogs
+      Then every action that asks for confirmation still works, by asking for a second tap
 
     Scenario: Controls the organizer has
       Then the organizer can admit, un-admit and reject registrations

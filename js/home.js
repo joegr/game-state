@@ -10,7 +10,7 @@
 
 import { loadTournament, loadTournamentState } from './config.js';
 import { gate } from './engine.js';
-import { el, clear, identityStore, copy } from './util.js';
+import { el, clear, identityStore, copy, confirmButton } from './util.js';
 import { randomToken, generateCode, randomPin } from './identity.js';
 import { submit, submitReady } from './api.js';
 import { mountOrganizer } from './organizer.js';
@@ -145,10 +145,9 @@ function renderSignedIn(me) {
     el('div', { class: 'row' },
       el('a', { class: 'btn', href: 'captain.html' }, 'Open captain view'),
       el('button', { class: 'btn ghost', onclick: async (e) => { e.target.textContent = (await copy(creds)) ? 'Copied ✓' : 'Copy failed'; } }, 'Copy code + PIN'),
-      el('button', { class: 'btn ghost', onclick: () => {
-        if (!confirm(`Sign ${me.fp} out of this device? You will need the code and PIN to sign back in.`)) return;
+      confirmButton('Sign out · register another team', 'Tap again — have you saved your code and PIN?', () => {
         identityStore.clear(tournament.name);
         render();
-      } }, 'Sign out · register another team')),
+      })),
   );
 }

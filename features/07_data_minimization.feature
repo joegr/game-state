@@ -11,7 +11,8 @@ Feature: Data minimization and what the system actually guarantees
       Then the public app repo holds tournament.md
       And the public roster repo holds roster.md (code, token hash, registration time) and results.md
       And the private tentative repo holds the queue: registrations with PIN hashes, submitted scores,
-        wrong-PIN attempts, the batch's rejections, and the organizer's admitted and accepted lists
+        wrong-PIN attempts, the batch's rejections, the organizer's admitted and accepted lists,
+        and which device has the organizer bar open (a random device id and a browser label)
       And a captain's device holds their code and PIN
       And that is everything
       # No names, emails, accounts, analytics, third-party services or servers.

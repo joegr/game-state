@@ -41,7 +41,8 @@ joegr/game-state-roster          PUBLIC — the record everyone reads
 joegr/game-state-tentative-scores   PRIVATE — the queue
 ├─ inbox/                        one file per submission (intake writes; batch consumes)
 ├─ signups.md scores.md attempts.md rejected.md     written only by batch
-├─ admitted.md accepted.md       written only by the organizer's CLI
+├─ admitted.md accepted.md       written only by the organizer (bar or CLI)
+├─ lock.md                       which device has the organizer bar open
 └─ .github/workflows/intake.yml batch.yml
 ```
 
@@ -121,8 +122,12 @@ every push.
 
 ## Run a tournament
 
-Everything is done from the **⚙ Organizer** bar (every page, bottom right;
-`#organizer` opens it), with your organizer token:
+Everything is done from the **⚙ Organizer** bar, with your organizer token.
+Open any page with `#organizer` the first time and set a PIN; after that the
+⚙ button (bottom right) shows on that device only. The bar is open on one
+device at a time: it holds `lock.md` in the private repo, releases it when
+you press Close, and lets it lapse after 15 idle minutes, so a lost device
+never locks you out for good. Another device sees only that it is in use.
 
 - **Teams:** Admit, Reject, Admit all, Un-admit.
 - **Scores**, side by side: Accept, Accept all agreed, Take it back, Clear

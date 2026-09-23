@@ -17,8 +17,15 @@
 //
 // Everything is read through api.github.com, so the bar sees the live record,
 // not the few-minutes-cached copy the public pages read.
+//
+// One device at a time: the bar claims lock.md in the private repo before it
+// shows anything, and releases it on Close. Another device sees only that the
+// bar is in use. A lock not refreshed for LOCK_STALE lapses, so a lost or
+// crashed device never locks the organizer out for good. The ⚙ trigger only
+// appears on a device with an organizer PIN; elsewhere the bar is reached
+// through #organizer.
 
-import { el, clear } from './util.js';
+import { el, clear, confirmButton, say } from './util.js';
 import { hashToken, randomPin, pinHash } from './identity.js';
 import {
   gate, reconstruct, parseConfigMd, roundOpenMatches, computeQueue, advanceCheck, pruneScores, MAX_PIN_ATTEMPTS,
@@ -29,7 +36,7 @@ import {
   waitingSignups, decideAdmit, decideUnadmit, decideRejectSignup, decideConfirm, decideResult, decideUnconfirm,
   decideRejectScore, decideUnlock, decideRepin,
 } from './orgActions.js';
-import { client } from './github.js';
+import { client, Conflict } from './github.js';
 
 const PIN = 'game-state:admin:pin';
 const TOKEN = 'game-state:admin:token';
@@ -50,14 +57,99 @@ let live = null;             // { tournament, record, queue } — read fresh thr
 let gh = null;
 let notice = null;           // { kind: 'ok' | 'error' | 'busy', text, extra? } shown at the top
 let pending = null;          // a stage-change plan waiting for confirmation
+let lockedOut = null;        // { on, since, seen } when another device holds the bar
+let trigger = null;
+
+const LOCK_FILE = 'lock.md';
+const LOCK_STALE = 15 * 60 * 1000;    // unrefreshed this long, a lock lapses
+const LOCK_REFRESH = 5 * 60 * 1000;   // refreshed on activity at most this often
+const DEVICE = 'game-state:admin:device';
+const deviceId = () => {
+  let id = local.get(DEVICE);
+  if (!id) { id = Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, '0')).join(''); local.set(DEVICE, id); }
+  return id;
+};
 
 // Every page calls this. `#organizer` in any URL opens the bar directly.
 export function mountOrganizer(t) {
   pageTournament = t;
   if (!local.get(TOKEN) && local.get(OLD_TOKEN)) { local.set(TOKEN, local.get(OLD_TOKEN)); local.del(OLD_TOKEN); }
-  document.body.append(el('button', { class: 'organizer-trigger', onclick: () => (bar ? close() : open()), title: 'Organizer controls' }, '⚙ Organizer'));
+  syncTrigger();
   if (location.hash === '#organizer' || session.get(OPEN)) open();
   window.addEventListener('hashchange', () => { if (location.hash === '#organizer') open(); });
+}
+
+// The ⚙ button shows only on the organizer's own device.
+function syncTrigger() {
+  const want = !!local.get(PIN);
+  if (want && !trigger) {
+    trigger = el('button', { class: 'organizer-trigger', onclick: () => (bar ? close() : open()), title: 'Organizer controls' }, '⚙ Organizer');
+    document.body.append(trigger);
+  } else if (!want && trigger) { trigger.remove(); trigger = null; }
+}
+
+// ---- one device at a time --------------------------------------------------------
+
+function parseLock(text) {
+  const get = (label) => (String(text || '').match(new RegExp(`^- ${label}: *(.*)$`, 'm')) || [])[1]?.trim();
+  const device = get('Device');
+  return device && device !== '(none)' ? { device, on: get('On'), since: get('Since'), seen: get('Seen') } : null;
+}
+
+function formatLock(lock) {
+  return '# Organizer lock\n\nThe organizer bar is open on one device at a time. Written by the bar; lapses after 15 minutes without activity.\n\n'
+    + (lock ? `- Device: ${lock.device}\n- On: ${lock.on}\n- Since: ${lock.since}\n- Seen: ${lock.seen}\n` : '- Device: (none)\n');
+}
+
+const deviceLabel = () => {
+  const ua = navigator.userAgent;
+  const os = /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android' : /Mac/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : 'a device';
+  const br = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'a browser';
+  return `${os} · ${br}`;
+};
+
+// { ok: true } when this device holds the bar (claiming or refreshing it),
+// { ok: false, lock } when another device does.
+async function claimLock(tr) {
+  const f = await gh.read(tr, LOCK_FILE);
+  const lock = parseLock(f.text);
+  const now = Date.now();
+  const age = lock ? now - Date.parse(lock.seen) : Infinity;
+  const mine = lock?.device === deviceId();
+  if (lock && !mine && age < LOCK_STALE) return { ok: false, lock };
+  if (mine && age < LOCK_REFRESH) return { ok: true };
+  const iso = new Date(now).toISOString();
+  try {
+    await gh.write(tr, LOCK_FILE, formatLock({ device: deviceId(), on: deviceLabel(), since: mine ? lock.since : iso, seen: iso }),
+      mine ? 'organizer bar: still open' : 'organizer bar: opened', f.sha);
+    return { ok: true };
+  } catch (e) {
+    if (!(e instanceof Conflict)) throw e;
+    const again = parseLock((await gh.read(tr, LOCK_FILE)).text);
+    return again && again.device !== deviceId() ? { ok: false, lock: again } : { ok: true };
+  }
+}
+
+async function releaseLock() {
+  const tr = live?.tournament.tentativeRepo || pageTournament?.tentativeRepo;
+  if (!gh || !tr) return;
+  try {
+    const f = await gh.read(tr, LOCK_FILE);
+    if (parseLock(f.text)?.device === deviceId()) await gh.write(tr, LOCK_FILE, formatLock(null), 'organizer bar: closed', f.sha);
+  } catch { /* it lapses on its own */ }
+}
+
+function renderLockedOut(body) {
+  const l = lockedOut;
+  const seen = Date.parse(l.seen);
+  const frees = new Date(seen + LOCK_STALE);
+  body.append(el('div', { class: 'card' },
+    el('h3', {}, 'In use on another device'),
+    el('p', { class: 'muted sm' }, `The organizer bar is open on ${l.on || 'another device'}${l.since ? ` since ${new Date(l.since).toLocaleString()}` : ''}. Only one device can use it at a time.`),
+    el('p', { class: 'muted sm' }, Number.isFinite(seen)
+      ? `It is released when that device closes the bar, or lapses at ${frees.toLocaleTimeString()} if it stays idle.`
+      : 'It is released when that device closes the bar.'),
+    el('div', { class: 'row' }, el('button', { class: 'btn', onclick: () => { lockedOut = null; render(); } }, 'Check again'))));
 }
 
 function open() {
@@ -73,10 +165,12 @@ function open() {
 
 function close() {
   if (!bar) return;
+  if (!lockedOut) releaseLock();
   document.removeEventListener('keydown', onKey);
   document.body.classList.remove('org-bar-open');
   bar.remove();
   bar = null;
+  live = null; lockedOut = null; pending = null; notice = null;
   session.del(OPEN);
   if (location.hash === '#organizer') history.replaceState(null, '', location.pathname + location.search);
 }
@@ -95,6 +189,7 @@ function render() {
   if (!local.get(PIN)) renderSetPin(body);
   else if (!session.get(UNLOCK)) renderUnlock(body);
   else if (!local.get(TOKEN)) renderTokenPrompt(body);
+  else if (lockedOut) renderLockedOut(body);
   else if (!live) { body.append(el('p', { class: 'muted sm' }, 'Loading the live record and the private queue…')); reload(); }
   else renderConsole(body);
   // A plan waiting for confirmation, or the outcome of an action, is shown at
@@ -107,35 +202,37 @@ function render() {
 function renderSetPin(body) {
   const p1 = el('input', { type: 'password', class: 'input', placeholder: 'choose a PIN', autocomplete: 'new-password' });
   const p2 = el('input', { type: 'password', class: 'input', placeholder: 'confirm PIN', autocomplete: 'new-password' });
+  const msg = el('div', {});
   body.append(
     el('p', { class: 'muted sm' }, 'Set a PIN to mark this device as the organizer’s. It only reveals this bar in this browser. What the bar can change is decided by your GitHub token.'),
-    p1, p2,
+    p1, p2, msg,
     el('div', { class: 'row' }, el('button', { class: 'btn', onclick: async () => {
-      if (p1.value.length < 4) return alert('Use at least 4 characters.');
-      if (p1.value !== p2.value) return alert('PINs do not match.');
+      if (p1.value.length < 4) return say(msg, 'Use at least 4 characters.');
+      if (p1.value !== p2.value) return say(msg, 'PINs do not match.');
       local.set(PIN, await hashToken(p1.value));
       session.set(UNLOCK, '1');
+      syncTrigger();
       render();
     } }, 'Set PIN')));
 }
 
 function renderUnlock(body) {
   const pin = el('input', { type: 'password', class: 'input', placeholder: 'PIN', autocomplete: 'current-password' });
+  const msg = el('div', {});
   const go = async () => {
-    if (await hashToken(pin.value) !== local.get(PIN)) return alert('Wrong PIN.');
+    if (await hashToken(pin.value) !== local.get(PIN)) return say(msg, 'Wrong PIN.');
     session.set(UNLOCK, '1');
     render();
   };
   pin.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   body.append(
     el('p', { class: 'muted sm' }, 'Enter your organizer PIN.'),
-    pin,
+    pin, msg,
     el('div', { class: 'row' },
       el('button', { class: 'btn', onclick: go }, 'Unlock'),
-      el('button', { class: 'btn ghost', onclick: () => {
-        if (!confirm('Remove the organizer PIN and token from this device?')) return;
-        local.del(PIN); local.del(TOKEN); render();
-      } }, 'Reset')));
+      confirmButton('Reset', 'Tap again: remove PIN and token here', () => {
+        local.del(PIN); local.del(TOKEN); syncTrigger(); render();
+      })));
   pin.focus();
 }
 
@@ -171,6 +268,11 @@ async function load() {
     const cfg = await gh.read(t0.appRepo, 'config/tournament.md');
     const tournament = cfg.text ? parseConfigMd(cfg.text) : t0;
     const tr = tournament.tentativeRepo;
+    if (tr) {
+      const held = await claimLock(tr);
+      if (!held.ok) { live = null; lockedOut = held.lock; render(); return; }
+    }
+    lockedOut = null;
     const [roster, results] = await Promise.all([gh.read(tournament.rosterRepo, 'roster.md'), gh.read(tournament.rosterRepo, 'results.md')]);
     const record = reconstruct(tournament, roster.text, results.text);
     let queue = null;
@@ -192,15 +294,17 @@ async function load() {
     if (e.status === 401) { local.del(TOKEN); notice = null; clear(bar.querySelector('.org-bar-body')); return renderTokenPrompt(bar.querySelector('.org-bar-body'), e.message); }
     notice = { kind: 'error', text: `Could not read GitHub: ${e.message}` };
     const body = bar?.querySelector('.org-bar-body');
-    if (body) { clear(body); renderNotice(body); body.append(el('div', { class: 'row' }, el('button', { class: 'btn', onclick: () => render() }, 'Try again'), el('button', { class: 'btn ghost', onclick: forgetToken }, 'Change token'))); }
+    if (body) { clear(body); renderNotice(body); body.append(el('div', { class: 'row' }, el('button', { class: 'btn', onclick: () => render() }, 'Try again'), changeTokenButton())); }
     return;
   }
   render();
 }
 
-function forgetToken() {
-  if (!confirm('Forget the organizer token on this device?')) return;
-  local.del(TOKEN); live = null; notice = null; render();
+function changeTokenButton() {
+  return confirmButton('Change token', 'Tap again to forget the token here', async () => {
+    await releaseLock();
+    local.del(TOKEN); live = null; notice = null; render();
+  }, 'btn ghost sm');
 }
 
 // ---- carrying out a decision --------------------------------------------------------
@@ -209,6 +313,12 @@ async function run(label, fn) {
   notice = { kind: 'busy', text: `${label}…` };
   render();
   try {
+    // Never act from a device that has lost the bar to another one.
+    const tr = live?.tournament.tentativeRepo;
+    if (tr) {
+      const held = await claimLock(tr);
+      if (!held.ok) { notice = null; live = null; lockedOut = held.lock; render(); return; }
+    }
     const out = await fn();
     if (out) notice = out;
   } catch (e) {
@@ -240,6 +350,10 @@ function act(label, decide) {
 
 function btn(label, onclick, cls = 'btn sm') {
   return el('button', { class: cls, onclick: (e) => { e.target.disabled = true; onclick(e); } }, label);
+}
+
+function confirmBtn(label, question, onclick, cls = 'btn ghost sm') {
+  return confirmButton(label, question, (e) => { e.target.disabled = true; onclick(e); }, cls);
 }
 
 function renderNotice(body) {
@@ -282,7 +396,7 @@ function renderConsole(body) {
   if (!tournament.tentativeRepo) body.append(el('div', { class: 'card' }, el('p', { class: 'muted sm' }, 'No "Tentative repo" in config/tournament.md yet.')));
   else if (q) renderQueues(body, q);
   body.append(stageCard(q));
-  body.append(el('div', { class: 'row' }, btn('Change token', forgetToken, 'btn ghost sm')));
+  body.append(el('div', { class: 'row' }, changeTokenButton()));
 }
 
 // ---- the queues: teams and scores, same road ---------------------------------------
@@ -304,7 +418,7 @@ function renderQueues(body, q) {
         el('span', { class: 'muted sm' }, `waiting since ${new Date(s.submittedAt).toLocaleString()}`)),
       canAdmit ? el('div', { class: 'row' },
         btn('Admit', () => act(`Admitting ${s.fp}`, () => decideAdmit(ctx, [s.fp]))),
-        btn('Reject', () => { if (confirm(`Reject ${s.fp}'s registration?`)) act(`Rejecting ${s.fp}`, () => decideRejectSignup(ctx, s.fp)); else render(); }, 'btn ghost sm')) : null));
+        confirmBtn('Reject', `Tap again to reject ${s.fp}`, () => act(`Rejecting ${s.fp}`, () => decideRejectSignup(ctx, s.fp)))) : null));
   }
   if (canAdmit && waiting.length > 1) teams.append(el('div', { class: 'row' }, btn(`Admit all ${waiting.length}`, () => act('Admitting everyone waiting', () => decideAdmit(ctx, 'all')))));
   if (q.admitted.length) {
@@ -368,14 +482,13 @@ function renderQueues(body, q) {
   if (teamCodes.length) {
     pins.append(el('details', {}, el('summary', { class: 'muted sm' }, 'Issue a new PIN (a captain lost theirs)'),
       el('p', { class: 'muted sm' }, 'The new PIN is shown here once. Give it to that captain privately; the old one stops working at the next batch.'),
-      el('div', { class: 'row' }, teamCodes.map((fp) => btn(fp, () => {
-        if (!confirm(`Issue a new PIN for ${fp}? Their current PIN stops working.`)) return render();
+      el('div', { class: 'row' }, teamCodes.map((fp) => confirmBtn(fp, `New PIN for ${fp}? Tap again`, () => {
         const pin = randomPin();
         act(`Issuing a new PIN for ${fp}`, async () => {
           const d = decideRepin(ctx, fp, await pinHash(fp, pin));
           return d.ok ? { ...d, extra: el('p', {}, 'New PIN for ', el('code', { class: 'mono' }, fp), ': ', el('strong', { class: 'mono big' }, pin), el('br', {}), el('span', { class: 'muted sm' }, 'Shown once — write it down now.')) } : d;
         });
-      }, 'btn ghost sm')))));
+      })))));
   } else pins.append(el('p', { class: 'muted sm' }, 'No registrations yet.'));
   body.append(pins);
 
@@ -419,7 +532,9 @@ function stageCard(q) {
     const g = gate(gateName, record.stage);
     card.append(el('div', { class: 'step' },
       el('div', { class: 'row spread' }, el('strong', {}, label), el('span', { class: 'muted sm' }, g.ok ? (detail || '') : 'not now')),
-      g.ok ? el('div', { class: 'row' }, btn(`Plan: ${label.toLowerCase()}`, () => plan(action, opts), 'btn sm')) : el('p', { class: 'muted sm' }, g.error)));
+      g.ok ? el('div', { class: 'row' }, opts?.askLeavePending
+        ? confirmBtn(`Plan: ${label.toLowerCase()}`, `${opts.askLeavePending} waiting would be left out. Tap again`, () => plan(action, { leavePending: true }), 'btn sm')
+        : btn(`Plan: ${label.toLowerCase()}`, () => plan(action, opts), 'btn sm')) : el('p', { class: 'muted sm' }, g.error)));
   };
   row('close', 'phase:close', 'Close registration', q ? `publishes ${q.admitted.length} admitted team(s)` : '');
   row('reopen', 'phase:reopen', 'Reopen registration');
@@ -440,11 +555,7 @@ function stageCard(q) {
 }
 
 async function plan(action, opts = {}) {
-  let leavePending = false;
-  if (opts.askLeavePending) {
-    if (!confirm(`${opts.askLeavePending} registration(s) are still waiting. The draw freezes the roster and they would be left out. Draw anyway?`)) return render();
-    leavePending = true;
-  }
+  const leavePending = !!opts.leavePending;
   const { tournament, record, queue: q } = live;
   if (!q && action !== 'reset') { notice = { kind: 'error', text: 'The private queue could not be read.' }; return render(); }
   const seed = action === 'draw' ? `${tournament.name}:${Date.now()}` : undefined;

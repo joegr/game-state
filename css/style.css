@@ -164,7 +164,8 @@ h4 { margin: 12px 0 6px; font-size: 14px; }
 .org-bar .plan .blob { white-space: pre-wrap; word-break: normal; }
 .org-bar strong.big { font-size: 24px; letter-spacing: .12em; }
 .btn.danger { background: var(--danger); color: #fff; }
-.btn.ghost.danger { background: transparent; color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); }
+.btn.armed, .btn.ghost.armed { background: var(--danger); color: #fff; border-color: var(--danger); }
+.btn.ghost.danger {background: transparent; color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); }
 
 /* ---- the public bracket page: full width, roadmap, drawn bracket, team cards ---- */
 body.wide main, body.wide .topbar, body.wide .foot { max-width: 1440px; padding: 0 24px; }

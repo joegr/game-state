@@ -8,7 +8,7 @@
 // too. That's why signing in here is only saved on this device: the first
 // submission is what proves the PIN.
 
-import { el, clear, identityStore } from './util.js';
+import { el, clear, identityStore, confirmButton } from './util.js';
 import { roundOpenMatches, gate } from './engine.js';
 import { isCode, isPin } from './identity.js';
 import { submit, submitReady } from './api.js';
@@ -59,11 +59,10 @@ function renderTeam(me) {
   root.append(el('div', { class: 'card' },
     el('div', { class: 'row spread' },
       el('div', {}, el('div', { class: 'muted sm' }, 'Signed in as'), el('div', { class: 'mono big' }, me.fp)),
-      el('button', { class: 'btn ghost sm', onclick: () => {
-        if (!confirm(`Sign ${me.fp} out of this device?`)) return;
+      confirmButton('Sign out', 'Tap again to sign out', () => {
         identityStore.clear(tournament.name);
         renderSignIn();
-      } }, 'Sign out')),
+      }, 'btn ghost sm')),
   ));
 
   if (record.stage === 'invalid') return root.append(note('Scores are paused', 'The tournament record is being corrected by the organizer. Check back shortly.'));
