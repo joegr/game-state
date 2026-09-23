@@ -42,6 +42,7 @@ jobs:
         with:
           node-version: '20'
       - name: Validate and queue
+        id: intake
         # The submission (which carries the PIN) is NOT passed here: a step's
         # env block is printed in the run log, and these logs are readable
         # with the public submit token. intake.mjs reads the inputs from the
@@ -51,6 +52,11 @@ jobs:
           APP_REPO: __APP_REPO__
           TENTATIVE_REPO: ${{ github.repository }}
         run: node app/tools/intake.mjs
+      # The verdict, as a step NAME: the captain's page reads it from the jobs
+      # list, which the public submit token can read (check annotations it cannot).
+      - name: ${{ steps.intake.outputs.verdict }}
+        if: steps.intake.outputs.verdict != ''
+        run: 'true'
       - name: Ask for a batch
         env:
           GH_TOKEN: ${{ github.token }}

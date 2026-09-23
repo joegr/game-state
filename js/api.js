@@ -1,11 +1,11 @@
 // game-state — how a captain's submission reaches GitHub Actions.
 //
 // The browser dispatches intake.yml in the private tentative repo, using a
-// token that can do nothing but start workflows there and read their check
-// results. It cannot read or write a single file. deploy.yml writes that token
+// token that can do nothing but start workflows there and read their runs.
+// It cannot read or write a single file. deploy.yml writes that token
 // into js/submit-config.js at deploy time, so it is never committed. Then
-// the page waits for the run named after a random receipt, and reads its
-// ACCEPTED / REJECTED annotation, which is the intake's verdict.
+// the page waits for the run named after a random receipt, and reads the
+// step intake.yml names "ACCEPTED: …" / "REJECTED: …", the intake's verdict.
 //
 // An Actions run takes roughly 20–60 seconds end to end.
 
@@ -65,11 +65,9 @@ async function verdict(run) {
   try {
     const jobs = await (await fetch(run.jobs_url, { headers: headers(), cache: 'no-store' })).json();
     const job = (jobs.jobs || [])[0];
-    if (job?.check_run_url) {
-      const notes = await (await fetch(`${job.check_run_url}/annotations`, { headers: headers(), cache: 'no-store' })).json();
-      const hit = (Array.isArray(notes) ? notes : []).find((a) => a.title === 'ACCEPTED' || a.title === 'REJECTED');
-      if (hit) return { accepted: hit.title === 'ACCEPTED', message: hit.message };
-    }
+    // intake.yml names a step "ACCEPTED: …" or "REJECTED: …" after its verdict.
+    const step = (job?.steps || []).map((s) => s.name).find((n) => /^(ACCEPTED|REJECTED): /.test(n));
+    if (step) return { accepted: step.startsWith('ACCEPTED'), message: step.replace(/^\w+: /, '') };
   } catch { /* fall through */ }
   return { accepted: false, error: true, message: run.conclusion === 'success'
     ? 'Your submission ran, but its result could not be read. Check with the organizer before resubmitting.'

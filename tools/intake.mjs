@@ -7,8 +7,9 @@
 // inbox/ (a wrong PIN becomes an attempt file), never an edit to a shared
 // file, so concurrent submissions cannot overwrite each other.
 //
-// The verdict goes out as a check annotation, titled ACCEPTED or REJECTED,
-// which is what the captain's page polls for. The run itself succeeds either
+// The verdict goes out as a step output that intake.yml turns into a step
+// named "ACCEPTED: …" or "REJECTED: …", which is what the captain's page reads
+// (plus a check annotation for the Actions UI). The run itself succeeds either
 // way. A failed run means the service broke, not that the captain was refused.
 //
 // Inputs — the workflow_dispatch inputs:
@@ -39,6 +40,9 @@ for (const secret of [fields.pin, fields.token]) if (secret) console.log(`::add-
 const esc = (s) => String(s).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
 function verdict(accepted, message, extra = '') {
   console.log(`::${accepted ? 'notice' : 'error'} title=${accepted ? 'ACCEPTED' : 'REJECTED'}${extra}::${esc(message)}`);
+  // intake.yml names its last step after this, and the captain's page reads
+  // it from the jobs list (the submit token can read jobs, not check runs).
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `verdict=${accepted ? 'ACCEPTED' : 'REJECTED'}: ${String(message).replace(/[\r\n]+/g, ' ')}\n`);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `**${accepted ? 'Accepted' : 'Rejected'}** (${kind}) — ${message}\n`);
 }
 

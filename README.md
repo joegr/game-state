@@ -105,7 +105,7 @@ every push.
 
    | Name | Repositories | Permissions | Where it goes |
    |---|---|---|---|
-   | `SUBMIT_TOKEN` | tentative only | **Actions: read & write**, **Checks: read** | secret in `game-state`. deploy.yml writes it into the **public site**, so treat it as public |
+   | `SUBMIT_TOKEN` | tentative only | **Actions: read & write**, nothing else | secret in `game-state`. deploy.yml writes it into the **public site**, so treat it as public |
    | `PUBLISH_TOKEN` | game-state, game-state-roster, tentative | **Contents: read & write** | secret in `game-state` |
    | organizer read token | tentative only | **Contents: read** | pasted into the organizer bar, stays in your browser |
 
