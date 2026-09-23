@@ -8,7 +8,7 @@ _simple state-based tournaments_
 - App repo: joegr/game-state
 - Roster repo: joegr/game-state-roster
 - Tentative repo: joegr/game-state-tentative-scores
-- Active phase: signup
+- Active phase: groups
 - Draw seed: (none)
 - Round: (none)
 
