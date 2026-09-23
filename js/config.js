@@ -54,3 +54,35 @@ export async function loadTournamentState(tournament) {
   const [rosterMd, resultsMd] = await Promise.all([loadRosterMd(tournament), loadResultsMd(tournament)]);
   return reconstruct(tournament, rosterMd, resultsMd);
 }
+
+// The freshest public read, for the public bracket: the three files through
+// api.github.com (about a minute behind, instead of the site's ten and raw's
+// five), falling back to the cached copies if the API refuses. `no-cache` makes
+// the browser revalidate with the stored ETag, and GitHub doesn't count an
+// unchanged (304) answer against the 60-requests-an-hour anonymous limit, so
+// polling costs almost nothing. Returns { tournament, record, fingerprint }.
+async function apiText(repo, path) {
+  if (!repo || /^https?:\/\//.test(repo)) return null;
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/contents/${path}`, {
+      headers: { Accept: 'application/vnd.github.raw' }, cache: 'no-cache',
+    });
+    if (res.status === 404) return '';
+    return res.ok ? await res.text() : null;
+  } catch { return null; }
+}
+
+export async function loadLive(siteTournament) {
+  const cfg = await apiText(siteTournament.appRepo, 'config/tournament.md');
+  const tournament = cfg ? parseConfigMd(cfg) : siteTournament;
+  const [roster, results] = await Promise.all([
+    apiText(tournament.rosterRepo, 'roster.md'), apiText(tournament.rosterRepo, 'results.md'),
+  ]);
+  const rosterMd = roster ?? await loadRosterMd(tournament);
+  const resultsMd = results ?? await loadResultsMd(tournament);
+  return {
+    tournament,
+    record: reconstruct(tournament, rosterMd, resultsMd),
+    fingerprint: [cfg ?? '', rosterMd, resultsMd].join('\u0000'),
+  };
+}

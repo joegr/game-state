@@ -165,3 +165,61 @@ h4 { margin: 12px 0 6px; font-size: 14px; }
 .org-bar strong.big { font-size: 24px; letter-spacing: .12em; }
 .btn.danger { background: var(--danger); color: #fff; }
 .btn.ghost.danger { background: transparent; color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent); }
+
+/* ---- the public bracket page: full width, roadmap, drawn bracket, team cards ---- */
+body.wide main, body.wide .topbar, body.wide .foot { max-width: 1440px; padding: 0 24px; }
+@media (max-width: 600px) { body.wide main, body.wide .topbar, body.wide .foot { padding: 0 16px; } }
+.champion-line { font-size: 22px; font-weight: 700; color: var(--gold); margin: 4px 0 8px; }
+.live-stamp { margin: 8px 0 0; }
+
+.stepper { list-style: none; margin: 0; padding: 6px 0 2px; display: flex; gap: 0; overflow-x: auto; }
+.step-item { flex: 1 1 0; min-width: 78px; display: grid; grid-template-rows: auto auto auto; justify-items: center; text-align: center; gap: 4px; position: relative; padding: 0 4px 4px; }
+.step-item::before { content: ''; position: absolute; top: 15px; left: -50%; width: 100%; height: 2px; background: var(--line); z-index: 0; }
+.step-item:first-child::before { display: none; }
+.step-item.past::before, .step-item.active::before { background: var(--good); }
+.step-dot { position: relative; z-index: 1; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700; background: var(--panel); border: 2px solid var(--line); color: var(--muted); }
+.step-item.past .step-dot { background: var(--good); border-color: var(--good); color: #fff; }
+.step-item.active .step-dot { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 20%, transparent); }
+.step-label { font-weight: 650; font-size: 14px; line-height: 1.25; }
+.step-item.upcoming .step-label { color: var(--muted); }
+
+.bracket-card { padding-bottom: 12px; }
+.bracket-frame { overflow-x: auto; overflow-y: hidden; margin: 6px 0 8px; padding: 0; }
+.bracket-svg { display: block; font-family: inherit; }
+.bracket-svg .round-title { font-size: 14px; font-weight: 700; fill: var(--ink); }
+.bracket-svg .round-sub { font-size: 11px; fill: var(--muted); letter-spacing: .02em; }
+.bracket-svg .round-sub.live { fill: var(--accent); font-weight: 700; }
+.bracket-svg .round-sub.done { fill: var(--good); }
+.bracket-svg .match-id { font-size: 10px; fill: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+.bracket-svg .card-bg { fill: var(--panel); stroke: var(--line); stroke-width: 1; }
+.bracket-svg .match-card.live .card-bg { stroke: var(--accent); stroke-width: 2; }
+.bracket-svg .match-card.decided .card-bg { stroke: color-mix(in srgb, var(--good) 40%, var(--line)); }
+.bracket-svg .card-split { stroke: var(--line); }
+.bracket-svg .row-hit { fill: transparent; }
+.bracket-svg .team-row:hover .row-hit { fill: color-mix(in srgb, var(--accent) 7%, transparent); }
+.bracket-svg .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; font-weight: 600; fill: var(--ink); letter-spacing: .06em; }
+.bracket-svg .placeholder { font-size: 12px; fill: var(--muted); font-style: italic; }
+.bracket-svg .score { font-size: 14px; font-weight: 700; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.bracket-svg .score.adv { font-size: 11px; font-weight: 600; }
+.bracket-svg .team-row.won .code, .bracket-svg .team-row.won .score { fill: var(--good); }
+.bracket-svg .team-row.lost .code { fill: var(--muted); text-decoration: line-through; }
+.bracket-svg .win-bar { fill: var(--good); }
+.bracket-svg .link { fill: none; stroke: var(--line); stroke-width: 2; }
+.bracket-svg .link.won { stroke: color-mix(in srgb, var(--good) 60%, var(--line)); }
+.bracket-svg .champion-card .card-bg { stroke: var(--line); stroke-dasharray: 4 3; }
+.bracket-svg .champion-card.crowned .card-bg { fill: color-mix(in srgb, var(--gold) 14%, var(--panel)); stroke: var(--gold); stroke-width: 2; stroke-dasharray: none; }
+.bracket-svg .champion-card.crowned .code { fill: var(--gold); font-size: 15px; }
+.bracket-svg.tracing .team-row:not(.hl), .bracket-svg.tracing .link:not(.hl) { opacity: .28; }
+.bracket-svg .team-row.hl .row-hit { fill: color-mix(in srgb, var(--accent) 12%, transparent); }
+.bracket-svg .link.hl { stroke: var(--accent); stroke-width: 3; }
+.bracket-svg .champion-card.hl .card-bg { stroke: var(--accent); }
+
+.team-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.team-card { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; text-align: left; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; cursor: pointer; }
+.team-card:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.team-card.traced { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+.team-card.gold { border-color: var(--gold); background: color-mix(in srgb, var(--gold) 9%, var(--bg)); }
+.team-card.out { opacity: .72; }
+.team-code { font-size: 20px; font-weight: 700; letter-spacing: .08em; }
+.step-item.crowned .step-dot { background: color-mix(in srgb, var(--gold) 18%, var(--panel)); border-color: var(--gold); font-size: 15px; }
+.step-item.crowned .step-label { color: var(--gold); }

@@ -85,7 +85,7 @@ function onKey(e) { if (e.key === 'Escape') close(); }
 
 function render() {
   if (!bar) return;
-  const scroll = bar.querySelector('.org-bar-body')?.scrollTop || 0;
+  const scroll = bar.scrollTop;
   clear(bar);
   bar.append(el('div', { class: 'row spread org-bar-head' },
     el('h2', {}, 'Organizer'),
@@ -97,7 +97,9 @@ function render() {
   else if (!local.get(TOKEN)) renderTokenPrompt(body);
   else if (!live) { body.append(el('p', { class: 'muted sm' }, 'Loading the live record and the private queue…')); reload(); }
   else renderConsole(body);
-  body.scrollTop = scroll;
+  // A plan waiting for confirmation, or the outcome of an action, is shown at
+  // the top: jump there so it is never rendered out of view.
+  bar.scrollTop = pending || notice ? 0 : scroll;
 }
 
 // ---- the device toggle -------------------------------------------------------
@@ -480,7 +482,7 @@ function publishPlan() {
     const link = out.url ? el('p', { class: 'sm' }, el('a', { href: out.url, target: '_blank', rel: 'noopener' }, 'The run on GitHub')) : null;
     if (out.timeout) return { kind: 'error', text: 'The publish workflow has not finished yet. Check the run, then Reload.', extra: link };
     if (out.verdict?.startsWith('PUBLISHED')) {
-      return { kind: 'ok', text: `${out.verdict.replace(/^PUBLISHED: /, 'Published ')}. The public pages update within a few minutes (the site redeploys, and GitHub caches the roster files briefly).`, extra: link };
+      return { kind: 'ok', text: `${out.verdict.replace(/^PUBLISHED: /, 'Published ').replace(/[.:]+$/, '')}. The public pages update within a few minutes (the site redeploys, and GitHub caches the roster files briefly).`, extra: link };
     }
     if (out.verdict) return { kind: 'error', text: out.verdict.replace(/^REFUSED: /, 'Refused: '), extra: link };
     return { kind: 'error', text: `The publish workflow ${out.run?.conclusion || 'failed'} without a verdict — open the run for details.`, extra: link };
