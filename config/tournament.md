@@ -8,9 +8,9 @@ _simple state-based tournaments_
 - App repo: joegr/game-state
 - Roster repo: joegr/game-state-roster
 - Tentative repo: joegr/game-state-tentative-scores
-- Active phase: complete
-- Draw seed: The Autumn Gauntlet:1790189694152
-- Round: done
+- Active phase: signup
+- Draw seed: (none)
+- Round: (none)
 
 ## Phases
 
